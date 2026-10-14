@@ -95,9 +95,26 @@ def test_offline_requires_csv(tmp_path: Path):
     assert cli.main([*base(tmp_path), "fetch", "--offline"]) == 2
 
 
-def test_run_is_placeholder(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    assert cli.main([*base(tmp_path), "run"]) == 0
-    assert "scheduler not yet available" in capsys.readouterr().out
+def test_run_starts_scheduler_with_job_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    from uncorrelated_trading.scheduler import Scheduler
+
+    monkeypatch.setenv("ALPACA_API_KEY", "PKFAKEFAKEFAKE")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "fake-secret")
+    started: list[Scheduler] = []
+    monkeypatch.setattr(Scheduler, "run_forever", lambda self: started.append(self))
+    assert cli.main([*base(tmp_path), "run", "--dry-run"]) == 0
+    assert len(started) == 1
+    assert set(started[0].next_fire_times()) == {"refresh", "send"}
+    messages = capsys.readouterr().err
+    assert "refresh next at" in messages and "send next at" in messages
+
+
+def test_run_requires_email_without_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "PKFAKEFAKEFAKE")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "fake-secret")
+    assert cli.main([*base(tmp_path), "run"]) == 2
 
 
 def test_calendar_command(tmp_path: Path, capsys: pytest.CaptureFixture[str]):

@@ -34,6 +34,7 @@ from uncorrelated_trading.errors import (
     StoreError,
 )
 from uncorrelated_trading.logging_setup import add_redaction, configure_logging
+from uncorrelated_trading.scheduler import Scheduler, build_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,6 @@ EXIT_DATA = 3
 EXIT_ANALYSIS = 4
 EXIT_SEND = 5
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-_SCHEDULER_PLACEHOLDER = "scheduler not yet available"
 
 
 # ----------------------------------------------------------------------------- parsing
@@ -132,7 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--dry-run", action="store_true", help="write to <data_dir>/outbox")
     _add_offline(daily)
 
-    sub.add_parser("run", help="long-running scheduler")
+    run = sub.add_parser("run", help="long-running scheduler")
+    run.add_argument("--dry-run", action="store_true", help="write to <data_dir>/outbox")
     return parser
 
 
@@ -333,8 +334,22 @@ def _cmd_daily(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    """Report that the scheduler is not wired in yet (Task 16)."""
-    _out(_SCHEDULER_PLACEHOLDER)
+    """Run the scheduler until SIGINT/SIGTERM."""
+    c = _container(args, require_alpaca=True, require_email=not args.dry_run, dry_run=args.dry_run)
+    try:
+        sched = Scheduler(
+            build_jobs(c),
+            c.clock,
+            c.runs,
+            c.settings.timezone,
+            c.config.schedule.poll_seconds,
+        )
+        tz = ZoneInfo(c.settings.timezone)
+        for name, when in sched.next_fire_times().items():
+            logger.info("scheduler: %s next at %s", name, when.astimezone(tz).isoformat())
+        sched.run_forever()
+    finally:
+        c.close()
     return EXIT_OK
 
 
