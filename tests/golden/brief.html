@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>[uncorrelated-trading] Brief for 2026-10-13 (data through 2026-10-13, post_close)</title>
+<style>body{font-family:Helvetica,Arial,sans-serif;font-size:14px;color:#222;background:#fff;margin:16px;}h1{font-size:18px;margin:0 0 8px 0;}h2{font-size:15px;margin:20px 0 6px 0;border-bottom:1px solid #ccc;}p{margin:4px 0;}table{border-collapse:collapse;margin:6px 0;}th,td{border:1px solid #ddd;padding:3px 8px;font-size:13px;}th{background:#f2f2f2;text-align:left;}td.num{text-align:right;font-family:Menlo,Consolas,monospace;}.warn{color:#a00;font-weight:bold;}.foot{color:#555;font-size:12px;}</style>
+</head>
+<body>
+<div class="section">
+<h1>[uncorrelated-trading] Brief for 2026-10-13 (data through 2026-10-13, post_close)</h1>
+<p>Data through 2026-10-13 (mode: post_close; calendar: alpaca).</p>
+<p>Note: after today&#x27;s close; using today&#x27;s session</p>
+<p>Universe: 6 symbols; analysed: 5 symbols.</p>
+<p>Changes since last run: largest set added BBB; removed CCC</p>
+</div>
+<div class="section">
+<h2>Data quality</h2>
+<p>5 of 6 requested symbols analysed; 1 primary-source failures; 1 fallback calls.</p>
+<p>Dropped: ZZZ (dropped_missing: missing 3 of 61 window days)</p>
+<p>Notes: EEE (fallback_used: alpaca returned no bars; twelvedata used)</p>
+</div>
+<div class="section">
+<h2>Top uncorrelated pairs (|rho| &lt; 0.20, 60-day Pearson)</h2>
+<table><thead><tr><th>#</th><th>Pair</th><th>max|rho|</th><th>CI upper</th><th>mean|rho|</th><th>Spearman</th><th>Stable</th><th>Mom z</th></tr></thead><tbody><tr><td class="num">1</td><td>AAA, DDD</td><td class="num">0.050</td><td class="num">0.300</td><td class="num">0.035</td><td class="num">0.045</td><td>yes</td><td class="num">+0.83</td></tr><tr><td class="num">2</td><td>BBB, DDD</td><td class="num">0.080</td><td class="num">0.330</td><td class="num">0.056</td><td class="num">0.072</td><td>yes</td><td class="num">-0.05</td></tr><tr><td class="num">3</td><td>AAA, BBB</td><td class="num">0.100</td><td class="num">0.350</td><td class="num">0.070</td><td class="num">0.090</td><td>no</td><td class="num">-0.43</td></tr></tbody></table>
+</div>
+<div class="section">
+<h2>Best sets by size</h2>
+<p>Size 3:</p>
+<table><thead><tr><th>#</th><th>Symbols</th><th>max|rho|</th><th>CI upper</th><th>mean|rho|</th><th>Spearman</th><th>Stable</th><th>Mom z</th></tr></thead><tbody><tr><td class="num">1</td><td>AAA, BBB, DDD</td><td class="num">0.100</td><td class="num">0.350</td><td class="num">0.070</td><td class="num">0.090</td><td>no</td><td class="num">+0.12</td></tr></tbody></table>
+<p>Size 4: none found</p>
+</div>
+<div class="section">
+<h2>Largest set</h2>
+<p>Size 3 (exact search)</p>
+<p>Symbols: AAA, BBB, DDD</p>
+<table><thead><tr><th>Diagnostic</th><th>Value</th></tr></thead><tbody><tr><td>max |rho|</td><td class="num">0.100</td></tr><tr><td>95% CI upper of max |rho|</td><td class="num">0.350</td></tr><tr><td>mean |rho|</td><td class="num">0.070</td></tr><tr><td>min eigenvalue</td><td class="num">0.800</td></tr><tr><td>Spearman max |rho| (tau 0.30)</td><td class="num">0.090 (passes)</td></tr><tr><td>stable in 120-day window</td><td class="num">no</td></tr><tr><td>mean momentum z</td><td class="num">+0.12</td></tr></tbody></table>
+</div>
+<div class="section">
+<h2>Momentum</h2>
+<p>Top 5 by composite momentum:</p>
+<table><thead><tr><th>Rank</th><th>Symbol</th><th>Comp z</th><th>20d log ret</th><th>Skip log ret</th><th>Vol-adj</th><th>Ann vol</th><th>Dir</th></tr></thead><tbody><tr><td class="num">1</td><td>DDD</td><td class="num">+1.21</td><td class="num">8.00%</td><td class="num">15.00%</td><td class="num">+1.90</td><td class="num">22.00%</td><td>up</td></tr><tr><td class="num">2</td><td>AAA</td><td class="num">+0.45</td><td class="num">3.00%</td><td class="num">5.00%</td><td class="num">+0.80</td><td class="num">18.00%</td><td>flat</td></tr><tr><td class="num">3</td><td>CCC</td><td class="num">+0.05</td><td class="num">1.00%</td><td class="num">2.00%</td><td class="num">+0.20</td><td class="num">25.00%</td><td>flat</td></tr><tr><td class="num">4</td><td>EEE</td><td class="num">-0.40</td><td class="num">-2.00%</td><td class="num">1.00%</td><td class="num">-0.50</td><td class="num">30.00%</td><td>flat</td></tr><tr><td class="num">5</td><td>BBB</td><td class="num">-1.31</td><td class="num">-6.00%</td><td class="num">-10.00%</td><td class="num">-1.40</td><td class="num">21.00%</td><td>down</td></tr></tbody></table>
+</div>
+<div class="section">
+<h2>Holdings</h2>
+<table><thead><tr><th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>P&amp;L</th><th>P&amp;L %</th><th>Mom rank</th><th>Dir</th><th>In set</th></tr></thead><tbody><tr><td>AAA</td><td class="num">10</td><td class="num">100.00</td><td class="num">1,000.00</td><td class="num">50.00</td><td class="num">5.26%</td><td class="num">2</td><td>flat</td><td>yes</td></tr><tr><td>XYZ</td><td class="num">5</td><td class="num">18.00</td><td class="num">90.00</td><td class="num">-10.00</td><td class="num">-10.00%</td><td class="num">-</td><td>-</td><td>no</td></tr></tbody></table>
+</div>
+<div class="section">
+<h2>Account summary</h2>
+<table><thead><tr><th>Item</th><th>Value (USD)</th></tr></thead><tbody><tr><td>Account type</td><td class="num">paper</td></tr><tr><td>Equity</td><td class="num">100,000.00</td></tr><tr><td>Change since previous close</td><td class="num">1,000.00 (1.01%)</td></tr><tr><td>Cash</td><td class="num">25,000.00</td></tr><tr><td>Buying power</td><td class="num">50,000.00</td></tr><tr><td>Portfolio value</td><td class="num">100,000.00</td></tr></tbody></table>
+</div>
+<div class="foot">
+<h2>Parameters and caveats</h2>
+<p>Parameters: tau=0.20, tau_spearman=0.30, primary window=60, windows=(60, 120), momentum k=20, L=120, s=20, weights=(0.40, 0.30, 0.30), direction threshold=0.50.</p>
+<p>Statistical caveat: SE(rho) ~ 0.13 near zero (1/sqrt(n-3) with n = 60 daily returns in the primary window), so tau = 0.20 is 1.51 standard errors from zero; pairs below tau are not proven independent.</p>
+<p>Dividend caveat: prices are split-adjusted only, so returns (including the 120-day long-window momentum return) omit dividend yield.</p>
+<p>Advisory output, not investment advice.</p>
+<p>uncorrelated-trading 0.1.0; run_id 0123456789abcdef0123456789abcdef.</p>
+</div>
+</body>
+</html>
