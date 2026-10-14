@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "symbol": "XOM",
+    "interval": "1day",
+    "currency": "USD",
+    "exchange_timezone": "America/New_York",
+    "exchange": "NYSE",
+    "mic_code": "XNYS",
+    "type": "Common Stock"
+  },
+  "values": [
+    {
+      "datetime": "2026-10-13",
+      "open": "112.50000",
+      "high": "113.75000",
+      "low": "111.90000",
+      "close": "113.20000",
+      "volume": "15234100"
+    },
+    {
+      "datetime": "2026-10-12",
+      "open": "111.10000",
+      "high": "112.80000",
+      "low": "110.95000",
+      "close": "112.40000",
+      "volume": "13002200"
+    },
+    {
+      "datetime": "2026-10-09",
+      "open": "110.00000",
+      "high": "111.30000",
+      "low": "109.70000",
+      "close": "111.05000"
+    }
+  ],
+  "status": "ok"
+}
