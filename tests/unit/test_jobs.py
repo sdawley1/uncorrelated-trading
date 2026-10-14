@@ -265,16 +265,21 @@ def test_fetch_falls_back_in_post_close_mode(tmp_path: Path, conn: sqlite3.Conne
     assert out.as_of.day == date(2026, 10, 12)
 
 
-def test_fetch_never_falls_back_before_the_close(tmp_path: Path, conn: sqlite3.Connection):
+@pytest.mark.parametrize("mode", ["intraday", "pre_open", "non_trading_day"])
+def test_fetch_falls_back_in_any_mode(tmp_path: Path, conn: sqlite3.Connection, mode: str):
+    # Behaviour changed in the final fix wave (C1): the fallback now applies to every mode.
     source = FakeSource(published_through=date(2026, 10, 9))
     c = make_container(tmp_path, conn, source)
-    as_of = AsOf(date(2026, 10, 12), "intraday", POST_CLOSE_NOW, False, "static", "intraday")
+    as_of = AsOf(date(2026, 10, 12), mode, POST_CLOSE_NOW, False, "static", "prior note")  # type: ignore[arg-type]
 
     out = fetch_job(c, as_of)
 
-    assert not out.fell_back_to_previous_day
-    assert out.as_of == as_of
-    assert {q.symbol for q in out.quality if q.status == "dropped_missing"} == set(SYMBOLS)
+    assert out.fell_back_to_previous_day
+    assert out.as_of.day == date(2026, 10, 9)
+    assert out.as_of.mode == mode
+    assert "bars for 2026-10-12 unavailable; using previous session" in out.as_of.note
+    assert out.as_of.note.startswith("prior note; ")
+    assert not any(q.status == "dropped_missing" for q in out.quality)
 
 
 def test_fetch_does_not_fall_back_when_most_bars_present(tmp_path: Path, conn: sqlite3.Connection):

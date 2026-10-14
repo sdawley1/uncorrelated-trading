@@ -246,3 +246,17 @@ def test_partially_excluded_symbol_keeps_fetch_status() -> None:
     assert {"NEW", "S00"} <= analysed
     assert not any(r.status.startswith("dropped") for r in q.per_symbol if r.symbol in analysed)
     assert q.fallback_calls == 1
+
+
+def test_as_of_day_without_bars_raises() -> None:
+    # Bars end on 2026-10-13; an as-of of 2026-10-14 must not be analysed on older data
+    # and labelled with the as-of day (even when fetch-time records say the bar is missing).
+    bars = make_bars(SYMBOLS, 300, seed=16)
+    missing = date(2026, 10, 14)
+    quality_in = tuple(
+        SymbolQuality(s, "dropped_missing", f"no bar for {missing}", 299, "") for s in SYMBOLS
+    )
+    with pytest.raises(
+        AnalysisError, match="no bars for as-of day 2026-10-14; last available day is 2026-10-13"
+    ):
+        run_analysis(bars, SYMBOLS, as_of(missing), params(), NOW, quality_in=quality_in)

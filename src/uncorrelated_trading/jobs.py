@@ -4,8 +4,8 @@ Every job takes a :class:`~uncorrelated_trading.app.Container` holding its depen
 persists its outcome, so ``report`` and ``send`` can be re-run later for a stored ``run_id``.
 
 * :func:`fetch_job` performs the incremental bar fetch with overlap, restatement detection,
-  one retry for symbols missing the as-of day, and the post-close "bars not yet published"
-  fallback to the previous trading day.
+  one retry for symbols missing the as-of day, and the fallback to the previous trading day
+  when most bars for the as-of day are unavailable.
 * :func:`analyze_job` runs the analysis on stored bars and snapshots the account.
 * :func:`report_job` renders the brief and workbook into an email (and optionally Sheets).
 * :func:`send_job` sends it once per run (unless forced) and logs the delivery.
@@ -56,7 +56,6 @@ from uncorrelated_trading.report.workbook import build_workbook, workbook_filena
 logger = logging.getLogger(__name__)
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-FALLBACK_NOTE = "today's bars not yet published; using previous session"
 _POST_CLOSE_MODES = ("post_close_settling", "post_close")
 _CALENDAR_PRIME_DAYS = 10
 
@@ -202,6 +201,24 @@ def _with_bar_on(c: Container, symbols: Sequence[str], day: date) -> set[str]:
     return {b.symbol for b in c.bars.load(list(symbols), day, day)}
 
 
+def fallback_note(as_of: AsOf) -> str:
+    """Return the note recorded when ``as_of.day`` lacks bars and the previous session is used.
+
+    Parameters
+    ----------
+    as_of : AsOf
+        The as-of whose day has too few bars.
+
+    Returns
+    -------
+    str
+        ``"bars for D unavailable; using previous session"``; in post-close modes the reason
+        ``"(not yet published)"`` is added after ``unavailable``.
+    """
+    reason = " (not yet published)" if as_of.mode in _POST_CLOSE_MODES else ""
+    return f"bars for {as_of.day.isoformat()} unavailable{reason}; using previous session"
+
+
 def fetch_job(c: Container, as_of: AsOf) -> FetchOutcome:
     """Incrementally fetch daily bars for the universe and store them (spec A6, A7).
 
@@ -209,10 +226,10 @@ def fetch_job(c: Container, as_of: AsOf) -> FetchOutcome:
     (or ``backfill_calendar_days`` before ``as_of.day`` when it has none); symbols sharing a
     start are fetched together, ending at :func:`data_request_end`. A fetched close differing
     from the stored close by more than ``close_mismatch_tolerance`` marks the symbol
-    ``close_mismatch`` ("restated") and triggers one full re-fetch of it. In post-close modes,
-    when fewer than half the universe have a bar for ``as_of.day``, the as-of moves to the
-    previous trading day. Symbols still lacking a bar for the final day are retried once and
-    then recorded as ``dropped_missing`` (never forward-filled).
+    ``close_mismatch`` ("restated") and triggers one full re-fetch of it. In every mode, when
+    fewer than half the universe have a bar for ``as_of.day``, the as-of moves to the previous
+    trading day with the note of :func:`fallback_note`. Symbols still lacking a bar for the
+    final day are retried once and then recorded as ``dropped_missing`` (never forward-filled).
 
     Parameters
     ----------
@@ -233,7 +250,7 @@ def fetch_job(c: Container, as_of: AsOf) -> FetchOutcome:
 
     fell_back = False
     present = _with_bar_on(c, universe, as_of.day)
-    if as_of.mode in _POST_CLOSE_MODES and 2 * len(present) < len(universe):
+    if 2 * len(present) < len(universe):
         previous = previous_trading_day(as_of.day, c.calendar)
         logger.warning(
             "only %d of %d symbols have a bar for %s; falling back to %s",
@@ -242,11 +259,12 @@ def fetch_job(c: Container, as_of: AsOf) -> FetchOutcome:
             as_of.day,
             previous,
         )
+        note = fallback_note(as_of)
         as_of = replace(
             as_of,
             day=previous,
             provisional=False,
-            note=f"{as_of.note}; {FALLBACK_NOTE}" if as_of.note else FALLBACK_NOTE,
+            note=f"{as_of.note}; {note}" if as_of.note else note,
         )
         fell_back = True
         present = _with_bar_on(c, universe, as_of.day)

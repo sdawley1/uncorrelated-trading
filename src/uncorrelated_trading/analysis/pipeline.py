@@ -92,7 +92,9 @@ def run_analysis(
     ------
     AnalysisError
         If ``now_utc`` is naive, fewer than ``primary_window + 1`` trading days exist up to
-        ``as_of.day``, or fewer than three symbols survive the primary window.
+        ``as_of.day``, the price window does not end on ``as_of.day`` (no bars for the as-of
+        day: the run is never silently analysed on older data), or fewer than three symbols
+        survive the primary window.
     """
     if now_utc.tzinfo is None or now_utc.utcoffset() is None:
         raise AnalysisError("now_utc must be timezone-aware")
@@ -120,6 +122,12 @@ def run_analysis(
             )
             continue
         built = build_price_matrix(bars, universe, end_day, window)
+        last_day = built.prices.index[-1]
+        if last_day != end_day:
+            raise AnalysisError(
+                f"no bars for as-of day {end_day.isoformat()}; "
+                f"last available day is {last_day.isoformat()}"
+            )
         window_drops[window] = {q.symbol: q for q in built.dropped}
         if built.prices.shape[1] < _MIN_WINDOW_SYMBOLS:
             if window == primary:
