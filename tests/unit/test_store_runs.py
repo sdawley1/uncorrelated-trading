@@ -323,3 +323,12 @@ def test_email_count(store: RunStore):
     store.log_email("a" * 32, receipt, ["x@example.com"])
     store.log_email("a" * 32, receipt, ["x@example.com"])
     assert store.email_count("a" * 32) == 2
+
+
+def test_job_status(store: RunStore, clock: FakeClock):
+    assert store.job_status("send", date(2026, 10, 14)) is None
+    store.job_started("send", date(2026, 10, 14))
+    assert store.job_status("send", date(2026, 10, 14)) == ("running", NOW)
+    clock.advance(60)
+    store.job_finished("send", date(2026, 10, 14), "ok", "")
+    assert store.job_status("send", date(2026, 10, 14)) == ("ok", NOW)

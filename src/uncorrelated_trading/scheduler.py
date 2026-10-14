@@ -232,7 +232,7 @@ class Scheduler:
                     "job %s for %s failed (%s); retrying in %s",
                     job.name,
                     run_date,
-                    exc,
+                    str(exc),
                     self._backoff,
                 )
             else:
@@ -243,8 +243,14 @@ class Scheduler:
         logger.info("job %s for %s finished", job.name, run_date)
         return False
 
-    def _handle_due(self, job: Job, due: datetime, now: datetime) -> tuple[bool, bool]:
-        """Process one passed fire instant; return (action invoked, retry pending)."""
+    def _handle_due(self, job: Job, due: datetime, now: datetime) -> tuple[bool, datetime | None]:
+        """Process one passed fire instant.
+
+        Returns ``(action invoked, wait_until)``. ``wait_until`` is set when the fire must be
+        attempted again later instead of advancing: after a retryable failure (now plus the
+        backoff), or while another claim is still ``running`` but not yet stale (when that
+        claim becomes reclaimable, provided this is still within the grace).
+        """
         run_date = self._local_date(due)
         late = now - due
         if late > job.misfire_grace:
@@ -258,18 +264,50 @@ class Scheduler:
             if self._runs.job_started(job.name, run_date, self._stale_running_after):
                 detail = f"missed by {late} (grace {job.misfire_grace})"
                 self._runs.job_finished(job.name, run_date, "missed", detail)
-            return False, False
+            return False, None
         if not self._runs.job_started(job.name, run_date, self._stale_running_after):
+            return False, self._wait_for_claim(job, run_date, due)
+        retry = self._run(job, run_date, due, now)
+        return True, (now + self._backoff if retry else None)
+
+    def _wait_for_claim(self, job: Job, run_date: date, due: datetime) -> datetime | None:
+        """Return when a held ``running`` claim becomes reclaimable, or None to move on.
+
+        Finished rows (``ok``, ``error``, ``missed``) return None (the fire is done). A
+        ``running`` claim (possibly left by a crash) returns the instant it turns stale,
+        unless that is beyond the grace, in which case the fire is given up as missed.
+        """
+        status = self._runs.job_status(job.name, run_date)
+        if status is None or status[0] != "running":
             logger.info("job %s for %s already ran; skipping", job.name, run_date)
-            return False, False
-        return True, self._run(job, run_date, due, now)
+            return None
+        reclaim_at = status[1] + self._stale_running_after
+        if reclaim_at - due > job.misfire_grace:
+            logger.warning(
+                "job %s for %s missed: claimed at %s and not reclaimable within grace %s",
+                job.name,
+                run_date,
+                status[1],
+                job.misfire_grace,
+            )
+            return None
+        logger.info(
+            "job %s for %s is claimed by a run started at %s; reclaiming at %s if unfinished",
+            job.name,
+            run_date,
+            status[1],
+            reclaim_at,
+        )
+        return reclaim_at
 
     def tick(self) -> list[str]:
         """Run every job whose due instant has passed, once.
 
         A fire within its grace runs (if no ``job_runs`` row exists for its local date yet,
         or the row awaits a retry); a later one is logged as missed. After a retryable failure
-        the job's due instant is kept and the job is skipped until the backoff has passed.
+        the job's due instant is kept and the job is skipped until the backoff has passed; the
+        same happens while another ``running`` claim for the date is younger than
+        ``stale_running_after`` (it is then reclaimed, if still within the grace).
         Fires skipped while the process was suspended are each processed in order, so after a
         long sleep the most recent fire still runs if it is within the grace. Job exceptions
         are logged and recorded, never propagated.
@@ -290,11 +328,11 @@ class Scheduler:
             for _ in range(_MAX_CATCH_UP_FIRES):
                 if due > now:
                     break
-                invoked, retry = self._handle_due(job, due, now)
+                invoked, wait_until = self._handle_due(job, due, now)
                 if invoked and job.name not in ran:
                     ran.append(job.name)
-                if retry:
-                    self._retry_at[job.name] = now + self._backoff
+                if wait_until is not None:
+                    self._retry_at[job.name] = wait_until
                     break
                 due = job.next_fire(due)
             else:

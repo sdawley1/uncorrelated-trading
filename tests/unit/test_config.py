@@ -334,3 +334,10 @@ def test_ci_uses_matrix_python_and_license_present():
     license_text = (REPO / "LICENSE").read_text(encoding="utf-8")
     assert license_text.startswith("MIT License")
     assert "Copyright (c) 2026 The uncorrelated-trading authors" in license_text
+
+
+def test_env_example_leaves_config_file_unset():
+    # Setting UT_CONFIG_FILE would defeat the packaged-default fallback outside the repo.
+    from dotenv import dotenv_values
+
+    assert "UT_CONFIG_FILE" not in dotenv_values(REPO / ".env.example")

@@ -68,7 +68,7 @@ def _reclaimable(row: sqlite3.Row, now: datetime, stale_after: timedelta | None)
         return True
     if status != "running" or stale_after is None:
         return False
-    return now - _dt(str(row["started_at"])) > stale_after
+    return now - _dt(str(row["started_at"])) >= stale_after
 
 
 def _f(value: float | None) -> float:
@@ -582,7 +582,7 @@ class RunStore:
 
         A new row is inserted when none exists. An existing row is reclaimed (reset to
         ``running`` with ``started_at`` = now) when its status is ``retry``, or when it is
-        ``running`` with ``started_at`` older than ``stale_after`` (a crash mid-job). Rows
+        ``running`` with ``started_at`` at least ``stale_after`` ago (a crash mid-job). Rows
         with any other status (``ok``, ``error``, ``missed``) are final.
 
         Parameters
@@ -626,6 +626,27 @@ class RunStore:
             msg = f"job_started({job}, {run_date}) failed: {exc}"
             raise StoreError(msg) from exc
         return cur.rowcount == 1
+
+    def job_status(self, job: str, run_date: date) -> tuple[str, datetime] | None:
+        """Return the status and ``started_at`` of ``(job, run_date)``.
+
+        Parameters
+        ----------
+        job : str
+            Job name.
+        run_date : date
+            Exchange-local date the job fires for.
+
+        Returns
+        -------
+        tuple[str, datetime] or None
+            ``(status, started_at)``, or None when no row exists.
+        """
+        row = self._one(
+            "SELECT status, started_at FROM job_runs WHERE job = ? AND run_date = ?",
+            (job, run_date.isoformat()),
+        )
+        return None if row is None else (str(row["status"]), _dt(str(row["started_at"])))
 
     def job_finished(self, job: str, run_date: date, status: str, detail: str) -> None:
         """Record the outcome of ``(job, run_date)``.

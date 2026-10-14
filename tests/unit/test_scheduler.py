@@ -416,16 +416,50 @@ def test_crashed_running_row_is_reclaimed_within_grace(conn: sqlite3.Connection)
     assert email_rows(conn) == 1
 
 
-def test_recent_running_row_is_not_reclaimed(conn: sqlite3.Connection):
+def test_restart_right_after_crash_waits_then_reclaims(conn: sqlite3.Connection):
+    # Crash with the claim at 07:00, restart one minute later (systemd RestartSec=60), tick
+    # every 30 s until 10:00: the fresh claim is not stolen, but the fire is not skipped
+    # either; it runs once the claim is 15 minutes old.
     leave_running(conn, ny(2026, 10, 14, 7))
-    clock = FakeClock(ny(2026, 10, 14, 7, 10))
+    clock = FakeClock(ny(2026, 10, 14, 7, 1))
     sender, action, runs = send_setup(conn, clock, failures=0)
-    s = Scheduler(
-        [job(action, startup=True)], clock, runs, TZ, 30, stale_running_after=timedelta(minutes=15)
-    )
-    assert s.tick() == []
+    ran_at: list[datetime] = []
+
+    def timed(d: date) -> None:
+        ran_at.append(clock.now())
+        action(d)
+
+    s = Scheduler([job(timed, startup=True)], clock, runs, TZ, 30)
+    for _ in range(int(3 * 3600 / 30)):
+        s.tick()
+        clock.advance(30)
+    assert len(ran_at) == 1
+    assert ran_at[0] >= ny(2026, 10, 14, 7, 15)
+    assert ran_at[0] <= ny(2026, 10, 14, 7, 16)
+    assert email_rows(conn) == 1
+    assert job_row(conn, "send", date(2026, 10, 14)) == ("ok", "")
+    assert s.next_fire_times() == {"send": ny(2026, 10, 15, 7)}
+
+
+def test_running_claim_outlasting_the_grace_is_missed(conn: sqlite3.Connection):
+    leave_running(conn, ny(2026, 10, 14, 7, 50))
+    clock = FakeClock(ny(2026, 10, 14, 7, 55))
+    sender, action, runs = send_setup(conn, clock, failures=0)
+    s = Scheduler([job(action, startup=True, grace_h=1)], clock, runs, TZ, 30)
+    assert s.tick() == []  # reclaimable only at 08:05, after the 08:00 end of grace
     assert sender.attempts == 0
-    assert job_row(conn, "send", date(2026, 10, 14))[0] == "running"  # type: ignore[index]
+    assert s.next_fire_times() == {"send": ny(2026, 10, 15, 7)}
+
+
+def test_finished_rows_still_skip_and_advance(conn: sqlite3.Connection):
+    clock = FakeClock(ny(2026, 10, 14, 7, 1))
+    runs = RunStore(conn, clock)
+    runs.job_finished("send", date(2026, 10, 14), "error", "boom")
+    calls: list[date] = []
+    s = Scheduler([job(calls.append, startup=True)], clock, runs, TZ, 30)
+    assert s.tick() == []
+    assert calls == []
+    assert s.next_fire_times() == {"send": ny(2026, 10, 15, 7)}
 
 
 # ----------------------------------------------------------------------------- build_jobs

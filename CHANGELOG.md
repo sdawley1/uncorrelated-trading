@@ -13,8 +13,9 @@ All notable changes to this project are documented in this file. The format foll
   previous session in every mode (not only after the close) when fewer than half of the
   universe have a bar for the day.
 - `trader run` retries jobs that fail with a transient error every 5 minutes within the
-  misfire grace (status `retry`); `running` rows left by a crash are reclaimed after 15
-  minutes, so a restart within the grace still sends that day's email.
+  misfire grace (status `retry`); a job left `running` by a crash is re-run on the first
+  tick after its claim is 15 minutes old, while within the grace, so a restart (even one
+  minute after the crash) still sends that day's email.
 - `--as-of` is compared with today in the exchange timezone; `--as-of` today resolves like a
   run without override, so an in-progress session is never stored as a close.
 - The cached Alpaca calendar refreshes again in long-running processes (remote attempts at
