@@ -1,0 +1,79 @@
+[project]
+name = "uncorrelated-trading"
+version = "0.1.0"
+description = "Advisory bot: uncorrelated energy/commodity equities with momentum scores, delivered by email."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "alpaca-py>=0.44",
+  "requests>=2.32",
+  "openpyxl>=3.1",
+  "python-dotenv>=1.0",
+  "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+sheets = ["gspread>=6.1", "google-auth>=2.30"]
+
+[project.scripts]
+trader = "uncorrelated_trading.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3", "pytest-cov>=5.0", "hypothesis>=6.112",
+  "ruff>=0.6", "mypy>=1.11", "pandas-stubs>=2.2", "types-requests>=2.32", "types-openpyxl>=3.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/uncorrelated_trading"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+# Verbatim design/plan copies: ruff >= 0.17 would reformat their Python code blocks.
+extend-exclude = ["docs/superpowers"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "D", "ANN", "DTZ", "PTH"]
+ignore = ["D203", "D212", "ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+plugins = []
+
+[[tool.mypy.overrides]]
+module = ["alpaca.*", "gspread.*", "google.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "integration: hits real external APIs; needs credentials",
+  "slow: takes more than a few seconds",
+]
+filterwarnings = ["error::DeprecationWarning:uncorrelated_trading.*"]
+
+[tool.coverage.run]
+source = ["uncorrelated_trading"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
