@@ -250,6 +250,30 @@ def test_snap_as_of_future_rejected():
         snap_as_of(date(2026, 10, 20), CAL, at(2026, 10, 14, 12, 0))
 
 
+def test_snap_as_of_future_uses_exchange_date():
+    # 21:00 ET on 2026-10-14 is already 2026-10-15 in UTC; the 15th is still the future.
+    with pytest.raises(ValueError, match="future"):
+        snap_as_of(date(2026, 10, 15), CAL, at(2026, 10, 14, 21, 0), "America/New_York", 20)
+    a = snap_as_of(date(2026, 10, 14), CAL, at(2026, 10, 14, 21, 0), "America/New_York", 20)
+    assert a.day == date(2026, 10, 14) and a.mode == "post_close"
+
+
+@pytest.mark.parametrize(
+    ("hh", "mm", "mode", "day", "provisional"),
+    [
+        (8, 0, "pre_open", date(2026, 10, 13), False),
+        (11, 0, "intraday", date(2026, 10, 13), False),
+        (16, 5, "post_close_settling", date(2026, 10, 14), True),
+        (17, 30, "post_close", date(2026, 10, 14), False),
+    ],
+)
+def test_snap_as_of_today_resolves_like_now(hh, mm, mode, day, provisional):
+    now = at(2026, 10, 14, hh, mm)
+    a = snap_as_of(date(2026, 10, 14), CAL, now, "America/New_York", 20)
+    assert (a.mode, a.day, a.provisional) == (mode, day, provisional)
+    assert a.note.startswith("--as-of override 2026-10-14 is today; ")
+
+
 def test_data_request_end_uses_day_end_when_earlier():
     now = at(2026, 10, 14, 12, 0)
     a = resolve_as_of(now, CAL, "America/New_York", 20)

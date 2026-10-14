@@ -86,7 +86,9 @@ def resolve_run_as_of(c: Container, override: date | None) -> AsOf:
     c : Container
         Dependencies (clock, calendar, settings, config).
     override : date or None
-        Requested as-of date; a non-trading date is snapped back to the previous session.
+        Requested as-of date (see :func:`~uncorrelated_trading.calendar.snap_as_of`): a
+        non-trading date is snapped back to the previous session, and today resolves like a
+        run without override.
 
     Returns
     -------
@@ -101,7 +103,13 @@ def resolve_run_as_of(c: Container, override: date | None) -> AsOf:
     now = c.clock.now()
     if override is not None:
         try:
-            return snap_as_of(override, c.calendar, now)
+            return snap_as_of(
+                override,
+                c.calendar,
+                now,
+                c.settings.timezone,
+                c.config.data.post_close_settle_minutes,
+            )
         except ValueError as exc:
             raise ConfigError([str(exc)]) from exc
     tz = c.settings.timezone

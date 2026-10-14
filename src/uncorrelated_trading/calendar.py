@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
@@ -449,12 +450,23 @@ def resolve_as_of(
     )
 
 
-def snap_as_of(requested: date, calendar: TradingCalendar, now_utc: datetime) -> AsOf:
+def snap_as_of(
+    requested: date,
+    calendar: TradingCalendar,
+    now_utc: datetime,
+    tz: str = "America/New_York",
+    settle_minutes: int = 20,
+) -> AsOf:
     """Build the :class:`AsOf` for an explicit ``--as-of`` override.
 
-    A trading day is used as is (``mode="post_close"``); a non-trading day is snapped back to
-    the previous trading day (``mode="non_trading_day"``) and a warning is logged. The
-    calendar source is read from ``calendar.source`` when present, else ``"static"``.
+    ``today`` is the exchange-local date of ``now_utc``. A date after ``today`` is rejected.
+    ``requested == today`` resolves exactly like a run without override
+    (:func:`resolve_as_of`: ``pre_open``/``intraday`` use the previous session,
+    ``post_close_settling`` is provisional), so an in-progress session is never stored or
+    analysed as a close. An earlier trading day is used as is (``mode="post_close"``); an
+    earlier non-trading day is snapped back to the previous trading day
+    (``mode="non_trading_day"``) and a warning is logged. The calendar source is read from
+    ``calendar.source`` when present, else ``"static"``.
 
     Parameters
     ----------
@@ -464,21 +476,38 @@ def snap_as_of(requested: date, calendar: TradingCalendar, now_utc: datetime) ->
         Calendar to consult.
     now_utc : datetime
         Current instant (tz-aware), recorded on the result.
+    tz : str
+        IANA exchange time zone defining ``today``.
+    settle_minutes : int
+        Settle window passed to :func:`resolve_as_of` when ``requested`` is today.
 
     Returns
     -------
     AsOf
-        The override as-of; never provisional.
+        The override as-of; provisional only for today within the settle window.
 
     Raises
     ------
     ValueError
-        If ``now_utc`` is naive or ``requested`` is after the current UTC date.
+        If ``now_utc`` is naive or ``requested`` is after today in the exchange time zone.
     """
     now = _require_aware(now_utc)
-    if requested > now.date():
-        msg = f"--as-of {requested.isoformat()} is in the future"
+    today = now.astimezone(ZoneInfo(tz)).date()
+    if requested > today:
+        msg = f"--as-of {requested.isoformat()} is in the future (today is {today.isoformat()})"
         raise ValueError(msg)
+    if requested == today:
+        calendar.trading_days(today - timedelta(days=_LOOKBACK_DAYS), today)
+        raw = getattr(calendar, "source", "static")
+        resolved = resolve_as_of(
+            now,
+            calendar,
+            tz,
+            settle_minutes,
+            calendar_source="alpaca" if raw == "alpaca" else "static",
+        )
+        note = f"--as-of override {requested.isoformat()} is today; {resolved.note}"
+        return replace(resolved, note=note)
     rows = calendar.trading_days(requested, requested)
     raw_source = getattr(calendar, "source", "static")
     source: CalendarSource = "alpaca" if raw_source == "alpaca" else "static"
