@@ -13,7 +13,7 @@ import json
 import math
 import sqlite3
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
 import numpy as np
@@ -59,6 +59,16 @@ def _iso(when: datetime) -> str:
 def _dt(value: str) -> datetime:
     """Parse an ISO 8601 string written by :func:`_iso`."""
     return datetime.fromisoformat(value)
+
+
+def _reclaimable(row: sqlite3.Row, now: datetime, stale_after: timedelta | None) -> bool:
+    """Return True when a ``job_runs`` row may be claimed again (``retry`` or stale ``running``)."""
+    status = str(row["status"])
+    if status == "retry":
+        return True
+    if status != "running" or stale_after is None:
+        return False
+    return now - _dt(str(row["started_at"])) > stale_after
 
 
 def _f(value: float | None) -> float:
@@ -546,8 +556,13 @@ class RunStore:
 
     # -- jobs ---------------------------------------------------------------
 
-    def job_started(self, job: str, run_date: date) -> bool:
+    def job_started(self, job: str, run_date: date, stale_after: timedelta | None = None) -> bool:
         """Claim ``(job, run_date)`` with status ``running``.
+
+        A new row is inserted when none exists. An existing row is reclaimed (reset to
+        ``running`` with ``started_at`` = now) when its status is ``retry``, or when it is
+        ``running`` with ``started_at`` older than ``stale_after`` (a crash mid-job). Rows
+        with any other status (``ok``, ``error``, ``missed``) are final.
 
         Parameters
         ----------
@@ -555,18 +570,36 @@ class RunStore:
             Job name.
         run_date : date
             Exchange-local date the job fires for.
+        stale_after : timedelta or None
+            Age after which a ``running`` row is considered abandoned; None never reclaims
+            ``running`` rows.
 
         Returns
         -------
         bool
-            True if this call inserted the row; False if it already existed.
+            True if this call inserted or reclaimed the row; False if another claim holds.
         """
+        now = self._clock.now()
+        key = (job, run_date.isoformat())
         try:
             with self.conn:
                 cur = self.conn.execute(
                     "INSERT OR IGNORE INTO job_runs (job, run_date, status, started_at)"
                     " VALUES (?, ?, 'running', ?)",
-                    (job, run_date.isoformat(), _iso(self._clock.now())),
+                    (*key, _iso(now)),
+                )
+                if cur.rowcount == 1:
+                    return True
+                row = self.conn.execute(
+                    "SELECT status, started_at FROM job_runs WHERE job = ? AND run_date = ?", key
+                ).fetchone()
+                if row is None or not _reclaimable(row, now, stale_after):
+                    return False
+                cur = self.conn.execute(
+                    "UPDATE job_runs SET status = 'running', started_at = ?, finished_at = NULL,"
+                    " detail = NULL WHERE job = ? AND run_date = ? AND status = ?"
+                    " AND started_at = ?",
+                    (_iso(now), *key, row["status"], row["started_at"]),
                 )
         except sqlite3.Error as exc:
             msg = f"job_started({job}, {run_date}) failed: {exc}"
@@ -585,7 +618,7 @@ class RunStore:
         run_date : date
             Exchange-local date the job fired for.
         status : str
-            Final status (e.g. ``"ok"``, ``"error"``).
+            Status: ``"ok"``, ``"error"`` or ``"missed"`` (final) or ``"retry"`` (reclaimable).
         detail : str
             Free-text detail.
         """

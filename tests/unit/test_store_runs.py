@@ -277,3 +277,29 @@ def test_previous_run_id_same_created_at_uses_insertion_order(store: RunStore):
     store.save_analysis(make_result("second", NOW))
     assert store.previous_run_id("second") == "first"
     assert store.previous_run_id("first") is None
+
+
+def test_job_started_reclaims_retry_rows(store: RunStore, clock: FakeClock):
+    store.job_started("send", date(2026, 10, 14))
+    store.job_finished("send", date(2026, 10, 14), "retry", "EmailSendError('timeout')")
+    clock.advance(300)
+    assert store.job_started("send", date(2026, 10, 14)) is True
+    row = store.conn.execute("SELECT status, started_at, finished_at FROM job_runs").fetchone()
+    assert row["status"] == "running"
+    assert datetime.fromisoformat(row["started_at"]) == NOW + timedelta(seconds=300)
+    assert row["finished_at"] is None
+    # Final statuses are never reclaimed.
+    for status in ("ok", "error", "missed"):
+        store.job_finished("send", date(2026, 10, 14), status, "")
+        assert store.job_started("send", date(2026, 10, 14), timedelta(seconds=1)) is False
+
+
+def test_job_started_reclaims_stale_running_row(store: RunStore, clock: FakeClock):
+    # A crash mid-job leaves the row "running" for ever; it is reclaimed once stale.
+    assert store.job_started("send", date(2026, 10, 14)) is True
+    clock.advance(3600)
+    assert store.job_started("send", date(2026, 10, 14), timedelta(hours=3)) is False
+    assert store.job_started("send", date(2026, 10, 14)) is False
+    clock.advance(2 * 3600 + 1)
+    assert store.job_started("send", date(2026, 10, 14), timedelta(hours=3)) is True
+    assert store.job_started("send", date(2026, 10, 14), timedelta(hours=3)) is False

@@ -8,7 +8,12 @@ job), its action, a misfire grace and whether a missed fire is caught up at star
 instant has passed, provided it is still within the grace (otherwise the miss is logged and
 recorded). Each ``(job, local date)`` is claimed through
 :meth:`~uncorrelated_trading.store.runs.RunStore.job_started` before running, so a job fires at
-most once per local date, and a restart never sends the same morning email twice.
+most once per local date, and a restart never sends the same morning email twice. A job that
+fails with a retryable error (``DataSourceError``/``EmailSendError`` with ``retryable=True``,
+``StoreError`` or ``OSError``) is recorded as ``retry`` and run again after
+``retry_backoff_seconds`` while the original fire instant is still within the grace; any other
+failure is recorded as a final ``error``. A ``running`` row older than the grace (a crash
+mid-job) is reclaimed.
 :meth:`Scheduler.run_forever` waits on a :class:`threading.Event` for at most ``poll_seconds``
 between ticks and exits cleanly on SIGINT/SIGTERM.
 
@@ -32,12 +37,33 @@ from zoneinfo import ZoneInfo
 from uncorrelated_trading import jobs
 from uncorrelated_trading.app import Container
 from uncorrelated_trading.clock import Clock
+from uncorrelated_trading.errors import DataSourceError, EmailSendError, StoreError
 from uncorrelated_trading.store.runs import RunStore
 
 logger = logging.getLogger(__name__)
 
 _MAX_SEARCH_DAYS = 400
 _MAX_CATCH_UP_FIRES = 400
+DEFAULT_RETRY_BACKOFF_SECONDS = 300
+
+
+def is_retryable(exc: BaseException) -> bool:
+    """Return True when a job failure is transient and worth retrying within the grace.
+
+    Parameters
+    ----------
+    exc : BaseException
+        Exception raised by a job action.
+
+    Returns
+    -------
+    bool
+        ``exc.retryable`` for :class:`DataSourceError` and :class:`EmailSendError`; True for
+        :class:`StoreError` and :class:`OSError`; False otherwise.
+    """
+    if isinstance(exc, DataSourceError | EmailSendError):
+        return bool(exc.retryable)
+    return isinstance(exc, StoreError | OSError)
 
 
 # ----------------------------------------------------------------------------- jobs
@@ -132,6 +158,8 @@ class Scheduler:
         Maximum wait between ticks in :meth:`run_forever`.
     stop_event : threading.Event or None
         Event ending :meth:`run_forever`; a new one when None.
+    retry_backoff_seconds : int
+        Wait before re-running a job that failed with a retryable error.
     """
 
     def __init__(
@@ -142,9 +170,12 @@ class Scheduler:
         tz: str,
         poll_seconds: int,
         stop_event: threading.Event | None = None,
+        retry_backoff_seconds: int = DEFAULT_RETRY_BACKOFF_SECONDS,
     ) -> None:
         """Create the scheduler and compute each job's first due instant."""
         self._jobs = tuple(jobs)
+        self._backoff = timedelta(seconds=retry_backoff_seconds)
+        self._retry_at: dict[str, datetime] = {}
         self._clock = clock
         self._runs = runs
         self._zone = ZoneInfo(tz)
@@ -177,20 +208,36 @@ class Scheduler:
         """Return the exchange-local date of ``when``."""
         return when.astimezone(self._zone).date()
 
-    def _run(self, job: Job, run_date: date) -> None:
-        """Run ``job`` for ``run_date`` and record its outcome; never raises job errors."""
+    def _run(self, job: Job, run_date: date, due: datetime, now: datetime) -> bool:
+        """Run ``job`` for ``run_date`` and record its outcome; never raises job errors.
+
+        Returns True when the job failed retryably and another attempt after the backoff
+        still falls within the grace of ``due`` (status ``retry``); a failure that cannot be
+        retried is recorded as ``error``.
+        """
         logger.info("running job %s for %s", job.name, run_date)
         try:
             job.action(run_date)
         except Exception as exc:
-            logger.exception("job %s for %s failed", job.name, run_date)
-            self._runs.job_finished(job.name, run_date, "error", repr(exc))
-            return
+            retry = is_retryable(exc) and now + self._backoff - due <= job.misfire_grace
+            if retry:
+                logger.warning(
+                    "job %s for %s failed (%s); retrying in %s",
+                    job.name,
+                    run_date,
+                    exc,
+                    self._backoff,
+                )
+            else:
+                logger.exception("job %s for %s failed", job.name, run_date)
+            self._runs.job_finished(job.name, run_date, "retry" if retry else "error", repr(exc))
+            return retry
         self._runs.job_finished(job.name, run_date, "ok", "")
         logger.info("job %s for %s finished", job.name, run_date)
+        return False
 
-    def _handle_due(self, job: Job, due: datetime, now: datetime) -> bool:
-        """Process one passed fire instant; return True if the action was invoked."""
+    def _handle_due(self, job: Job, due: datetime, now: datetime) -> tuple[bool, bool]:
+        """Process one passed fire instant; return (action invoked, retry pending)."""
         run_date = self._local_date(due)
         late = now - due
         if late > job.misfire_grace:
@@ -201,23 +248,24 @@ class Scheduler:
                 late,
                 job.misfire_grace,
             )
-            if self._runs.job_started(job.name, run_date):
+            if self._runs.job_started(job.name, run_date, job.misfire_grace):
                 detail = f"missed by {late} (grace {job.misfire_grace})"
                 self._runs.job_finished(job.name, run_date, "missed", detail)
-            return False
-        if not self._runs.job_started(job.name, run_date):
+            return False, False
+        if not self._runs.job_started(job.name, run_date, job.misfire_grace):
             logger.info("job %s for %s already ran; skipping", job.name, run_date)
-            return False
-        self._run(job, run_date)
-        return True
+            return False, False
+        return True, self._run(job, run_date, due, now)
 
     def tick(self) -> list[str]:
         """Run every job whose due instant has passed, once.
 
-        A fire within its grace runs (if no ``job_runs`` row exists for its local date yet);
-        a later one is logged as missed. Fires skipped while the process was suspended are
-        each processed in order, so after a long sleep the most recent fire still runs if it
-        is within the grace. Job exceptions are logged and recorded, never propagated.
+        A fire within its grace runs (if no ``job_runs`` row exists for its local date yet,
+        or the row awaits a retry); a later one is logged as missed. After a retryable failure
+        the job's due instant is kept and the job is skipped until the backoff has passed.
+        Fires skipped while the process was suspended are each processed in order, so after a
+        long sleep the most recent fire still runs if it is within the grace. Job exceptions
+        are logged and recorded, never propagated.
 
         Returns
         -------
@@ -227,12 +275,20 @@ class Scheduler:
         now = self._clock.now()
         ran: list[str] = []
         for job in self._jobs:
+            retry_at = self._retry_at.get(job.name)
+            if retry_at is not None and now < retry_at:
+                continue
+            self._retry_at.pop(job.name, None)
             due = self._due[job.name]
             for _ in range(_MAX_CATCH_UP_FIRES):
                 if due > now:
                     break
-                if self._handle_due(job, due, now) and job.name not in ran:
+                invoked, retry = self._handle_due(job, due, now)
+                if invoked and job.name not in ran:
                     ran.append(job.name)
+                if retry:
+                    self._retry_at[job.name] = now + self._backoff
+                    break
                 due = job.next_fire(due)
             else:
                 due = job.next_fire(now)

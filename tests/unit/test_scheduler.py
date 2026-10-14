@@ -14,11 +14,13 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from factories import sample_analysis_result, sample_portfolio
 from uncorrelated_trading import jobs
 from uncorrelated_trading.calendar import StaticCalendar
 from uncorrelated_trading.clock import FakeClock
 from uncorrelated_trading.config import ScheduleConfig
-from uncorrelated_trading.models import AsOf
+from uncorrelated_trading.errors import DataSourceError, EmailSendError, StoreError
+from uncorrelated_trading.models import AsOf, EmailMessage, ReportBundle, SendReceipt
 from uncorrelated_trading.scheduler import Job, Scheduler, build_jobs, daily_at
 from uncorrelated_trading.store.db import connect, migrate
 from uncorrelated_trading.store.runs import RunStore
@@ -268,6 +270,125 @@ def test_stop_event_preset_returns_immediately(conn: sqlite3.Connection):
     action = Recorder()
     Scheduler([job(action)], clock, RunStore(conn, clock), TZ, 1, stop_event=stop).run_forever()
     assert action.calls == []
+
+
+# ----------------------------------------------------------------------------- retry
+
+
+@dataclass
+class FlakySender:
+    """Sender whose first ``failures`` sends raise a retryable SMTP-style error."""
+
+    clock: FakeClock
+    failures: int = 1
+    attempts: int = 0
+    name: str = "smtp"
+
+    def send(self, message: EmailMessage) -> SendReceipt:
+        self.attempts += 1
+        if self.attempts <= self.failures:
+            raise EmailSendError("smtp", "421 service not available", retryable=True)
+        return SendReceipt("smtp", f"id-{self.attempts}", self.clock.now())
+
+
+def send_setup(
+    conn: sqlite3.Connection, clock: FakeClock, failures: int
+) -> tuple[FlakySender, Callable[[date], None], RunStore]:
+    runs = RunStore(conn, clock)
+    result = sample_analysis_result()
+    runs.save_analysis(result)
+    sender = FlakySender(clock, failures)
+    c: Any = SimpleNamespace(dry_run=False, runs=runs, sender=sender)
+    message = EmailMessage("bot@example.com", ("a@example.com",), "s", "t", "<p>h</p>", (), "k")
+    bundle = ReportBundle(result, sample_portfolio(), message, None)
+
+    def action(d: date) -> None:
+        jobs.send_job(c, bundle)
+
+    return sender, action, runs
+
+
+def email_rows(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT COUNT(*) FROM email_log").fetchone()[0])
+
+
+def test_retryable_send_failure_is_retried_after_backoff(conn: sqlite3.Connection):
+    clock = FakeClock(ny(2026, 10, 14, 6, 59))
+    sender, action, runs = send_setup(conn, clock, failures=1)
+    s = Scheduler([job(action)], clock, runs, TZ, 30, retry_backoff_seconds=300)
+    clock.advance(120)  # 07:01
+    assert s.tick() == ["send"]
+    status = job_row(conn, "send", date(2026, 10, 14))
+    assert status is not None and status[0] == "retry" and "421" in status[1]
+    assert s.next_fire_times() == {"send": ny(2026, 10, 14, 7)}
+    clock.advance(60)  # still inside the backoff
+    assert s.tick() == []
+    clock.advance(300)
+    assert s.tick() == ["send"]
+    assert job_row(conn, "send", date(2026, 10, 14)) == ("ok", "")
+    assert sender.attempts == 2
+    assert email_rows(conn) == 1
+    clock.advance(3600)
+    assert s.tick() == []
+    assert email_rows(conn) == 1
+    assert s.next_fire_times() == {"send": ny(2026, 10, 15, 7)}
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        DataSourceError("alpaca", "503", retryable=True),
+        StoreError("database is locked"),
+        OSError("network is unreachable"),
+    ],
+)
+def test_other_retryable_errors_are_retried(conn: sqlite3.Connection, exc: Exception):
+    clock = FakeClock(ny(2026, 10, 14, 7, 1))
+    calls: list[date] = []
+
+    def action(d: date) -> None:
+        calls.append(d)
+        if len(calls) == 1:
+            raise exc
+
+    s = Scheduler([job(action, startup=True)], clock, RunStore(conn, clock), TZ, 30)
+    assert s.tick() == ["send"]
+    assert job_row(conn, "send", date(2026, 10, 14))[0] == "retry"  # type: ignore[index]
+    clock.advance(301)
+    assert s.tick() == ["send"]
+    assert calls == [date(2026, 10, 14)] * 2
+    assert job_row(conn, "send", date(2026, 10, 14)) == ("ok", "")
+
+
+def test_non_retryable_error_is_final(conn: sqlite3.Connection):
+    clock = FakeClock(ny(2026, 10, 14, 7, 1))
+    calls: list[date] = []
+
+    def action(d: date) -> None:
+        calls.append(d)
+        raise EmailSendError("smtp", "535 auth failed", retryable=False)
+
+    s = Scheduler([job(action, startup=True)], clock, RunStore(conn, clock), TZ, 30)
+    assert s.tick() == ["send"]
+    clock.advance(3600)
+    assert s.tick() == []
+    assert len(calls) == 1
+    assert job_row(conn, "send", date(2026, 10, 14))[0] == "error"  # type: ignore[index]
+
+
+def test_retries_stop_at_the_grace(conn: sqlite3.Connection):
+    clock = FakeClock(ny(2026, 10, 14, 6, 59))
+    sender, action, runs = send_setup(conn, clock, failures=100)
+    s = Scheduler([job(action, grace_h=1)], clock, runs, TZ, 30, retry_backoff_seconds=1200)
+    for _ in range(12):
+        clock.advance(600)
+        s.tick()
+    # Attempts at 07:09, 07:29 and 07:49; a fourth (08:09) would be outside the 1 h grace,
+    # so the third failure is recorded as a final error.
+    assert sender.attempts == 3
+    assert job_row(conn, "send", date(2026, 10, 14))[0] == "error"  # type: ignore[index]
+    assert email_rows(conn) == 0
+    assert s.next_fire_times() == {"send": ny(2026, 10, 15, 7)}
 
 
 # ----------------------------------------------------------------------------- build_jobs
