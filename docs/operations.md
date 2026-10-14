@@ -9,7 +9,8 @@ There are two ways to run the bot unattended:
   a run missed during sleep is made up on wake within the misfire grace (6 h refresh, 3 h
   send). A job failing with a transient error (network not yet up after wake, SMTP 4xx,
   Alpaca 5xx, locked database) is retried every 5 minutes within the same grace; a job
-  left `running` by a crash is reclaimed once it is older than the grace.
+  left `running` by a crash (claimed more than 15 minutes ago) is reclaimed, so after a
+  restart within the grace the job runs again and the morning email is still sent once.
 - **Option 2: two one-shot commands** from cron or Task Scheduler:
   `uv run trader daily` after the close and `uv run trader send --latest` in the morning.
 

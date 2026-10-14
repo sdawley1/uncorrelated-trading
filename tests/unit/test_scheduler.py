@@ -391,6 +391,43 @@ def test_retries_stop_at_the_grace(conn: sqlite3.Connection):
     assert s.next_fire_times() == {"send": ny(2026, 10, 15, 7)}
 
 
+def leave_running(conn: sqlite3.Connection, started: datetime) -> None:
+    """Simulate a crash mid-send: the claim row stays ``running``."""
+    conn.execute(
+        "INSERT INTO job_runs (job, run_date, status, started_at) VALUES (?, ?, 'running', ?)",
+        ("send", "2026-10-14", started.astimezone(UTC).isoformat(timespec="microseconds")),
+    )
+    conn.commit()
+
+
+def test_crashed_running_row_is_reclaimed_within_grace(conn: sqlite3.Connection):
+    # Crash at 07:00, restart at 07:20: the 20-minute-old claim is stale (15 min default)
+    # while the fire is still within the 3 h grace, so the email still goes out once.
+    leave_running(conn, ny(2026, 10, 14, 7))
+    clock = FakeClock(ny(2026, 10, 14, 7, 20))
+    sender, action, runs = send_setup(conn, clock, failures=0)
+    s = Scheduler([job(action, startup=True)], clock, runs, TZ, 30)
+    assert s.tick() == ["send"]
+    assert sender.attempts == 1
+    assert email_rows(conn) == 1
+    assert job_row(conn, "send", date(2026, 10, 14)) == ("ok", "")
+    clock.advance(3600)
+    assert s.tick() == []
+    assert email_rows(conn) == 1
+
+
+def test_recent_running_row_is_not_reclaimed(conn: sqlite3.Connection):
+    leave_running(conn, ny(2026, 10, 14, 7))
+    clock = FakeClock(ny(2026, 10, 14, 7, 10))
+    sender, action, runs = send_setup(conn, clock, failures=0)
+    s = Scheduler(
+        [job(action, startup=True)], clock, runs, TZ, 30, stale_running_after=timedelta(minutes=15)
+    )
+    assert s.tick() == []
+    assert sender.attempts == 0
+    assert job_row(conn, "send", date(2026, 10, 14))[0] == "running"  # type: ignore[index]
+
+
 # ----------------------------------------------------------------------------- build_jobs
 
 

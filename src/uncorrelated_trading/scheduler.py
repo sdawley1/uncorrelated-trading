@@ -12,8 +12,9 @@ most once per local date, and a restart never sends the same morning email twice
 fails with a retryable error (``DataSourceError``/``EmailSendError`` with ``retryable=True``,
 ``StoreError`` or ``OSError``) is recorded as ``retry`` and run again after
 ``retry_backoff_seconds`` while the original fire instant is still within the grace; any other
-failure is recorded as a final ``error``. A ``running`` row older than the grace (a crash
-mid-job) is reclaimed.
+failure is recorded as a final ``error``. A ``running`` row older than
+``stale_running_after`` (15 min by default; a crash mid-job) is reclaimed, so a fire still
+within its grace runs again after a restart.
 :meth:`Scheduler.run_forever` waits on a :class:`threading.Event` for at most ``poll_seconds``
 between ticks and exits cleanly on SIGINT/SIGTERM.
 
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 _MAX_SEARCH_DAYS = 400
 _MAX_CATCH_UP_FIRES = 400
 DEFAULT_RETRY_BACKOFF_SECONDS = 300
+DEFAULT_STALE_RUNNING_AFTER = timedelta(minutes=15)
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -160,6 +162,9 @@ class Scheduler:
         Event ending :meth:`run_forever`; a new one when None.
     retry_backoff_seconds : int
         Wait before re-running a job that failed with a retryable error.
+    stale_running_after : timedelta
+        Age after which a ``running`` claim is treated as left by a crash and reclaimed
+        (independent of the grace; a fire still within its grace then runs again).
     """
 
     def __init__(
@@ -171,10 +176,12 @@ class Scheduler:
         poll_seconds: int,
         stop_event: threading.Event | None = None,
         retry_backoff_seconds: int = DEFAULT_RETRY_BACKOFF_SECONDS,
+        stale_running_after: timedelta = DEFAULT_STALE_RUNNING_AFTER,
     ) -> None:
         """Create the scheduler and compute each job's first due instant."""
         self._jobs = tuple(jobs)
         self._backoff = timedelta(seconds=retry_backoff_seconds)
+        self._stale_running_after = stale_running_after
         self._retry_at: dict[str, datetime] = {}
         self._clock = clock
         self._runs = runs
@@ -248,11 +255,11 @@ class Scheduler:
                 late,
                 job.misfire_grace,
             )
-            if self._runs.job_started(job.name, run_date, job.misfire_grace):
+            if self._runs.job_started(job.name, run_date, self._stale_running_after):
                 detail = f"missed by {late} (grace {job.misfire_grace})"
                 self._runs.job_finished(job.name, run_date, "missed", detail)
             return False, False
-        if not self._runs.job_started(job.name, run_date, job.misfire_grace):
+        if not self._runs.job_started(job.name, run_date, self._stale_running_after):
             logger.info("job %s for %s already ran; skipping", job.name, run_date)
             return False, False
         return True, self._run(job, run_date, due, now)
