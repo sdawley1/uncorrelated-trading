@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, datetime
 
 from uncorrelated_trading.analysis.correlation import correlation_matrix
@@ -234,43 +235,36 @@ def _quality_report(
 ) -> DataQualityReport:
     """Merge fetch-time quality records with the analysis drops (one row per symbol).
 
-    A symbol dropped from the primary window carries that window's drop record. An analysed
-    symbol excluded from a longer window or from momentum carries the drop record of the
-    longest window that excluded it, with the detail naming what it was excluded from. An
-    analysis record replaces an ``ok``/``fallback_used`` fetch record for the same symbol;
-    any other fetch record is kept and the analysis record is omitted.
+    A symbol dropped from the primary window carries that window's ``dropped_*`` record,
+    which replaces an ``ok``/``fallback_used`` fetch record (any other fetch record is kept
+    instead). A symbol in ``analysed`` never carries a ``dropped_*`` status: if it was
+    excluded from a longer window or from momentum, its fetch record (when present) keeps
+    its status and gains the exclusion text in ``detail``; otherwise it gets an ``ok`` row
+    whose detail names what it was excluded from.
     """
-    analysis: dict[str, SymbolQuality] = {}
-    for sym, q in window_drops.get(primary, {}).items():
-        analysis[sym] = q
-    for sym in analysed:
-        excluded = [w for w, drops in sorted(window_drops.items()) if sym in drops]
-        reason = window_drops[excluded[-1]][sym] if excluded else momentum_drops.get(sym)
-        if reason is None:
-            continue
-        parts = [f"{w}-day window" for w in excluded]
-        if sym in momentum_drops:
-            parts.append("momentum")
-        analysis[sym] = SymbolQuality(
-            symbol=sym,
-            status=reason.status,
-            detail=(
-                f"analysed in the {primary}-day window; excluded from "
-                f"{', '.join(parts)}: {reason.detail}"
-            ),
-            bars_available=reason.bars_available,
-            source=reason.source,
-        )
+    analysed_set = set(analysed)
+    primary_drops = {
+        sym: q for sym, q in window_drops.get(primary, {}).items() if sym not in analysed_set
+    }
+    exclusions = _partial_exclusions(analysed, primary, window_drops, momentum_drops)
 
     rows: list[SymbolQuality] = []
     seen: set[str] = set()
     for q in quality_in:
-        if q.symbol in seen:
+        sym = q.symbol
+        if sym in seen:
             continue
-        if q.symbol in analysis and q.status in _OVERRIDABLE_STATUSES:
+        if sym in primary_drops and q.status in _OVERRIDABLE_STATUSES:
             continue
-        seen.add(q.symbol)
-        rows.append(q)
+        seen.add(sym)
+        if sym in analysed_set and q.status.startswith("dropped"):
+            rows.append(exclusions.get(sym) or replace(q, status="ok"))
+        elif sym in exclusions:
+            note = exclusions[sym].detail
+            rows.append(replace(q, detail=f"{q.detail}; {note}" if q.detail else note))
+        else:
+            rows.append(q)
+    analysis = {**primary_drops, **exclusions}
     order = {s: i for i, s in enumerate(universe)}
     for sym in sorted(analysis, key=lambda s: (order.get(s, len(order)), s)):
         if sym not in seen:
@@ -284,3 +278,37 @@ def _quality_report(
         primary_source_failures=fallbacks,
         fallback_calls=fallbacks,
     )
+
+
+def _partial_exclusions(
+    analysed: Sequence[str],
+    primary: int,
+    window_drops: dict[int, dict[str, SymbolQuality]],
+    momentum_drops: dict[str, SymbolQuality],
+) -> dict[str, SymbolQuality]:
+    """Build ``ok`` rows for analysed symbols excluded from longer windows or momentum.
+
+    The detail names every excluded window and momentum, followed by the drop detail of
+    the longest excluding window (or of momentum); ``bars_available`` and ``source`` come
+    from that same record.
+    """
+    out: dict[str, SymbolQuality] = {}
+    for sym in analysed:
+        excluded = [w for w, drops in sorted(window_drops.items()) if sym in drops]
+        reason = window_drops[excluded[-1]][sym] if excluded else momentum_drops.get(sym)
+        if reason is None:
+            continue
+        parts = [f"{w}-day window" for w in excluded]
+        if sym in momentum_drops:
+            parts.append("momentum")
+        out[sym] = SymbolQuality(
+            symbol=sym,
+            status="ok",
+            detail=(
+                f"analysed in the {primary}-day window; excluded from "
+                f"{', '.join(parts)}: {reason.detail}"
+            ),
+            bars_available=reason.bars_available,
+            source=reason.source,
+        )
+    return out

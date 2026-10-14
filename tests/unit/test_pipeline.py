@@ -151,9 +151,6 @@ def test_short_history_symbol_excluded_only_from_long_windows() -> None:
             assert "NEW" not in matrix(result.correlations, w, method).symbols
     assert "NEW" in result.quality.analysed
     assert "NEW" not in {m.symbol for m in result.momentum}
-    rows = [q for q in result.quality.per_symbol if q.symbol == "NEW"]
-    assert len(rows) == 1
-    assert rows[0].status == "dropped_short_history"
 
 
 def test_limited_history_still_produces_primary_window() -> None:
@@ -203,3 +200,49 @@ def test_naive_now_rejected() -> None:
     bars = make_bars(SYMBOLS[:5], 300, seed=13)
     with pytest.raises(AnalysisError):
         run_analysis(bars, SYMBOLS[:5], as_of(), params(), datetime(2026, 10, 13))  # noqa: DTZ001
+
+
+def _partial_case(
+    quality_in: tuple[SymbolQuality, ...] = (),
+) -> tuple[list[Bar], list[str], tuple[SymbolQuality, ...]]:
+    old = SYMBOLS[:5]
+    bars: list[Bar] = make_bars(old, 300, seed=14) + make_bars(["NEW"], 100, seed=15)
+    return bars, [*old, "NEW"], quality_in
+
+
+def test_partially_excluded_symbol_is_not_marked_dropped() -> None:
+    bars, universe, _ = _partial_case()
+    result = run_analysis(bars, universe, as_of(), params(), NOW)
+    q = result.quality
+    assert "NEW" in q.analysed
+    rows = [r for r in q.per_symbol if r.symbol == "NEW"]
+    assert len(rows) == 1
+    assert rows[0].status == "ok"
+    assert rows[0].detail.startswith("analysed in the 60-day window; excluded from ")
+    assert "120-day window" in rows[0].detail
+    assert "250-day window" in rows[0].detail
+    assert "momentum" in rows[0].detail
+    assert rows[0].source == "csv"
+    analysed = set(q.analysed)
+    assert not any(r.status.startswith("dropped") for r in q.per_symbol if r.symbol in analysed)
+
+
+def test_partially_excluded_symbol_keeps_fetch_status() -> None:
+    fetch = (
+        SymbolQuality("NEW", "fallback_used", "alpaca failed", 100, "twelvedata"),
+        SymbolQuality("S00", "dropped_short_history", "stale fetch note", 300, "alpaca"),
+    )
+    bars, universe, quality_in = _partial_case(fetch)
+    result = run_analysis(bars, universe, as_of(), params(), NOW, quality_in=quality_in)
+    q = result.quality
+    by_symbol = {r.symbol: r for r in q.per_symbol}
+    assert len(by_symbol) == len(q.per_symbol)
+    new = by_symbol["NEW"]
+    assert new.status == "fallback_used"
+    assert new.source == "twelvedata"
+    assert new.detail.startswith("alpaca failed; analysed in the 60-day window; excluded from ")
+    assert "momentum" in new.detail
+    analysed = set(q.analysed)
+    assert {"NEW", "S00"} <= analysed
+    assert not any(r.status.startswith("dropped") for r in q.per_symbol if r.symbol in analysed)
+    assert q.fallback_calls == 1
