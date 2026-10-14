@@ -303,3 +303,23 @@ def test_job_started_reclaims_stale_running_row(store: RunStore, clock: FakeCloc
     clock.advance(2 * 3600 + 1)
     assert store.job_started("send", date(2026, 10, 14), timedelta(hours=3)) is True
     assert store.job_started("send", date(2026, 10, 14), timedelta(hours=3)) is False
+
+
+def test_latest_run_id_prefers_latest_as_of_day(store: RunStore):
+    # A historical --as-of run created later must not become "latest" (M1).
+    current = make_result("current", NOW)
+    store.save_analysis(current)
+    old_as_of = replace(current.as_of, day=date(2026, 6, 1))
+    store.save_analysis(replace(make_result("historic", NOW + timedelta(hours=1)), as_of=old_as_of))
+    assert store.latest_run_id() == "current"
+    store.save_analysis(make_result("rerun", NOW + timedelta(hours=2)))
+    assert store.latest_run_id() == "rerun"
+
+
+def test_email_count(store: RunStore):
+    store.save_analysis(make_result())
+    assert store.email_count("a" * 32) == 0
+    receipt = SendReceipt("smtp", "m1", NOW)
+    store.log_email("a" * 32, receipt, ["x@example.com"])
+    store.log_email("a" * 32, receipt, ["x@example.com"])
+    assert store.email_count("a" * 32) == 2

@@ -354,8 +354,9 @@ def build_jobs(c: Container) -> list[Job]:
     -------
     list[Job]
         ``refresh`` at ``refresh_time`` on trading days (fetch, analyse, build the report;
-        no send) and ``send`` at ``send_time`` on ``send_on_days`` (send the latest run if it
-        has not been emailed, else run the full daily job), with startup catch-up for ``send``.
+        no send, no Sheets publish) and ``send`` at ``send_time`` on ``send_on_days`` (send
+        the latest run if it has not been emailed, else run the full daily job), with
+        startup catch-up for ``send``.
     """
     schedule = c.config.schedule
     tz = c.settings.timezone
@@ -366,8 +367,14 @@ def build_jobs(c: Container) -> list[Job]:
     def refresh(run_date: date) -> None:
         as_of = jobs.resolve_run_as_of(c, None)
         fetched = jobs.fetch_job(c, as_of)
-        result = jobs.analyze_job(c, fetched.as_of, fetched.quality)
-        jobs.report_job(c, result.run_id)
+        result = jobs.analyze_job(
+            c,
+            fetched.as_of,
+            fetched.quality,
+            primary_source_failures=fetched.primary_failures,
+            fallback_calls=fetched.fallback_calls,
+        )
+        jobs.report_job(c, result.run_id, publish_sheets=False)
 
     def send(run_date: date) -> None:
         run_id = c.runs.latest_run_id()

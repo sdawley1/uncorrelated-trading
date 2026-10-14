@@ -464,6 +464,10 @@ def test_send_job_refuses_duplicate(tmp_path: Path, conn: sqlite3.Connection):
 
     forced = send_job(c, bundle, force=True)
     assert forced.message_id == "id-2"
+    # A forced resend carries a fresh idempotency key so Resend does not replay (M2).
+    assert [m.idempotency_key for m in sender.sent] == ["run-key", "run-key-f1"]
+    send_job(c, bundle, force=True)
+    assert sender.sent[-1].idempotency_key == "run-key-f2"
 
 
 def test_send_job_failure_does_not_log(tmp_path: Path, conn: sqlite3.Connection):
@@ -510,3 +514,42 @@ def test_report_job_previous_largest_from_earlier_run(tmp_path: Path, conn: sqli
     second_bundle = report_job(c, second.run_id)
     assert "no previous run" in first_bundle.message.text_body
     assert "Changes since last run: largest set unchanged" in second_bundle.message.text_body
+
+
+def test_analyze_job_records_composite_counters(tmp_path: Path, conn: sqlite3.Connection):
+    c = make_container(tmp_path, conn, FakeSource(AS_OF_DAY))
+    seed(c.bars, AS_OF_DAY)
+    result = analyze_job(c, post_close(), (), primary_source_failures=7, fallback_calls=3)
+    quality = c.runs.load_analysis(result.run_id).quality
+    assert (quality.primary_source_failures, quality.fallback_calls) == (7, 3)
+
+
+def test_fetch_outcome_carries_composite_counters(tmp_path: Path, conn: sqlite3.Connection):
+    gone = date(2000, 1, 3)
+    source = FakeSource(published_through=AS_OF_DAY, last_day={"S05": gone, "S06": gone})
+    fallback = EmptyFallback()
+    c = with_fallback(make_container(tmp_path, conn, source), fallback, per_run=20)
+    out = fetch_job(c, post_close())
+    # First pass: S05 and S06 fail on the primary and use the fallback; each is retried once.
+    assert out.primary_failures == 4
+    assert out.fallback_calls == 4 == len(fallback.calls)
+
+
+@dataclass
+class FakeSheets:
+    published: list[str] = field(default_factory=list)
+
+    def publish(self, inputs: object) -> str:
+        self.published.append("x")
+        return "https://sheets.example/1"
+
+
+def test_report_job_can_skip_sheets(tmp_path: Path, conn: sqlite3.Connection):
+    sheets = FakeSheets()
+    c = replace(make_container(tmp_path, conn, FakeSource(AS_OF_DAY)), sheets=sheets)
+    seed(c.bars, AS_OF_DAY)
+    run = analyze_job(c, post_close(), ())
+    assert report_job(c, run.run_id, publish_sheets=False).sheets_url is None
+    assert sheets.published == []
+    assert report_job(c, run.run_id).sheets_url == "https://sheets.example/1"
+    assert len(sheets.published) == 1

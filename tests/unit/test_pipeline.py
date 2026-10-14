@@ -269,3 +269,20 @@ def test_stray_extra_day_bar_does_not_abort_run() -> None:
     result = run_analysis([*bars, stray], SYMBOLS, as_of(), params(), NOW)
     assert result.quality.analysed == tuple(SYMBOLS)
     assert matrix(result.correlations, 60, "pearson").end_day == END
+
+
+def test_explicit_composite_counters_override_row_counting() -> None:
+    bars = make_bars(SYMBOLS[:5], 300, seed=18)
+    quality_in = (SymbolQuality("S01", "fallback_used", "alpaca failed", 300, "twelvedata"),)
+    result = run_analysis(
+        bars,
+        SYMBOLS[:5],
+        as_of(),
+        params(),
+        NOW,
+        quality_in=quality_in,
+        primary_source_failures=4,
+        fallback_calls=2,
+    )
+    assert result.quality.primary_source_failures == 4
+    assert result.quality.fallback_calls == 2

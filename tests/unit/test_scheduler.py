@@ -415,12 +415,22 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(
         jobs,
         "fetch_job",
-        lambda c, a: log.append("fetch") or SimpleNamespace(as_of=a, quality=()),
+        lambda c, a: (
+            log.append("fetch")
+            or SimpleNamespace(as_of=a, quality=(), primary_failures=0, fallback_calls=0)
+        ),
     )
     monkeypatch.setattr(
-        jobs, "analyze_job", lambda c, a, q: log.append("analyze") or SimpleNamespace(run_id="r1")
+        jobs,
+        "analyze_job",
+        lambda c, a, q, **kw: log.append("analyze") or SimpleNamespace(run_id="r1"),
     )
-    monkeypatch.setattr(jobs, "report_job", lambda c, r: log.append(f"report:{r}") or "bundle")
+
+    def report(c: Any, r: str, publish_sheets: bool = True) -> str:
+        log.append(f"report:{r}" + ("" if publish_sheets else ":no-sheets"))
+        return "bundle"
+
+    monkeypatch.setattr(jobs, "report_job", report)
     monkeypatch.setattr(jobs, "send_job", lambda c, b: log.append(f"send:{b}"))
     monkeypatch.setattr(jobs, "daily_job", lambda c: log.append("daily"))
     return log
@@ -463,7 +473,7 @@ def test_refresh_action_fetches_analyses_and_reports(conn: sqlite3.Connection, c
     clock = FakeClock(ny(2026, 10, 14, 16, 30))
     refresh = {j.name: j for j in build_jobs(fake_container(conn, clock))}["refresh"]
     refresh.action(date(2026, 10, 14))
-    assert calls == ["fetch", "analyze", "report:r1"]
+    assert calls == ["fetch", "analyze", "report:r1:no-sheets"]  # Sheets published by send
 
 
 def test_send_action_without_runs_runs_daily(conn: sqlite3.Connection, calls: list[str]):

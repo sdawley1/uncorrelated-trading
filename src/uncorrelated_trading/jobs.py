@@ -67,13 +67,16 @@ class FetchOutcome:
 
     ``as_of`` is the as-of actually used, which differs from the requested one when
     ``fell_back_to_previous_day`` is True. ``quality`` carries every fetch-time record
-    (``fallback_used``, ``close_mismatch``, ``dropped_missing``).
+    (``fallback_used``, ``close_mismatch``, ``dropped_missing``). ``primary_failures`` and
+    ``fallback_calls`` sum the composite source's counters over every request of the run.
     """
 
     as_of: AsOf
     bars_written: int
     quality: tuple[SymbolQuality, ...]
     fell_back_to_previous_day: bool
+    primary_failures: int = 0
+    fallback_calls: int = 0
 
 
 # ----------------------------------------------------------------------------- as-of
@@ -338,6 +341,8 @@ def fetch_job(c: Container, as_of: AsOf) -> FetchOutcome:
         bars_written=written,
         quality=final,
         fell_back_to_previous_day=fell_back,
+        primary_failures=counters.primary_failures,
+        fallback_calls=counters.fallback_calls,
     )
 
 
@@ -391,7 +396,14 @@ def _read_portfolio(c: Container) -> PortfolioContext:
     return PortfolioContext(account=account, positions=positions, error=None)
 
 
-def analyze_job(c: Container, as_of: AsOf, quality_in: Sequence[SymbolQuality]) -> AnalysisResult:
+def analyze_job(
+    c: Container,
+    as_of: AsOf,
+    quality_in: Sequence[SymbolQuality],
+    *,
+    primary_source_failures: int | None = None,
+    fallback_calls: int | None = None,
+) -> AnalysisResult:
     """Analyse stored bars up to ``as_of.day`` and persist the run and portfolio snapshot.
 
     Parameters
@@ -402,6 +414,9 @@ def analyze_job(c: Container, as_of: AsOf, quality_in: Sequence[SymbolQuality]) 
         As-of to analyse (typically :attr:`FetchOutcome.as_of`).
     quality_in : Sequence[SymbolQuality]
         Fetch-time quality records merged into the report.
+    primary_source_failures, fallback_calls : int or None
+        Composite counters from :class:`FetchOutcome`; None (e.g. ``trader analyze`` on
+        stored bars) counts the ``fallback_used`` records instead.
 
     Returns
     -------
@@ -417,7 +432,14 @@ def analyze_job(c: Container, as_of: AsOf, quality_in: Sequence[SymbolQuality]) 
     start = as_of.day - timedelta(days=c.config.data.backfill_calendar_days)
     bars = c.bars.load(universe, start, as_of.day)
     result = run_analysis(
-        bars, universe, as_of, c.config.analysis, c.clock.now(), quality_in=quality_in
+        bars,
+        universe,
+        as_of,
+        c.config.analysis,
+        c.clock.now(),
+        quality_in=quality_in,
+        primary_source_failures=primary_source_failures,
+        fallback_calls=fallback_calls,
     )
     c.runs.save_analysis(result)
     c.runs.save_portfolio(result.run_id, _read_portfolio(c))
@@ -462,7 +484,9 @@ def _previous_largest(c: Container, run_id: str) -> tuple[str, ...] | None:
     return largest.symbols if largest is not None else ()
 
 
-def report_job(c: Container, run_id: str, out_dir: Path | None = None) -> ReportBundle:
+def report_job(
+    c: Container, run_id: str, out_dir: Path | None = None, publish_sheets: bool = True
+) -> ReportBundle:
     """Build the email (brief + workbook) for a stored run.
 
     Parameters
@@ -473,12 +497,15 @@ def report_job(c: Container, run_id: str, out_dir: Path | None = None) -> Report
         Stored analysis run.
     out_dir : Path or None
         When given, the workbook is also written there.
+    publish_sheets : bool
+        Publish to Google Sheets when it is configured (the scheduler's ``refresh`` passes
+        False so the Sheet is published once a day, by ``send``).
 
     Returns
     -------
     ReportBundle
         Result, portfolio, ready-to-send message and the Sheets URL (None when Sheets is
-        disabled or publishing failed).
+        disabled, skipped or publishing failed).
 
     Raises
     ------
@@ -510,7 +537,7 @@ def report_job(c: Container, run_id: str, out_dir: Path | None = None) -> Report
     filename = workbook_filename(result.as_of.day)
 
     sheets_url: str | None = None
-    if c.sheets is not None:
+    if c.sheets is not None and publish_sheets:
         try:
             sheets_url = c.sheets.publish(inputs)
             logger.info("published run %s to Google Sheets: %s", run_id, sheets_url)
@@ -555,7 +582,9 @@ def send_job(c: Container, bundle: ReportBundle, force: bool = False) -> SendRec
     bundle : ReportBundle
         Report built by :func:`report_job`.
     force : bool
-        Send even if an email was already logged for this run.
+        Send even if an email was already logged for this run. The idempotency key then
+        gets the suffix ``-f<N>`` (N = sends already logged for the run), so Resend does not
+        replay the earlier response.
 
     Returns
     -------
@@ -572,7 +601,12 @@ def send_job(c: Container, bundle: ReportBundle, force: bool = False) -> SendRec
         raise EmailSendError(
             c.sender.name, f"already sent for run {run_id} (use --force)", retryable=False
         )
-    receipt = c.sender.send(bundle.message)
+    message = bundle.message
+    if force and not c.dry_run:
+        sent_before = c.runs.email_count(run_id)
+        if sent_before:
+            message = replace(message, idempotency_key=f"{message.idempotency_key}-f{sent_before}")
+    receipt = c.sender.send(message)
     if c.dry_run:
         logger.info("dry run: wrote %s (not recorded as sent)", receipt.message_id)
     else:
@@ -602,6 +636,12 @@ def daily_job(c: Container, as_of_override: date | None = None) -> SendReceipt:
     as_of = resolve_run_as_of(c, as_of_override)
     logger.info("daily run as of %s (%s): %s", as_of.day, as_of.mode, as_of.note)
     fetched = fetch_job(c, as_of)
-    result = analyze_job(c, fetched.as_of, fetched.quality)
+    result = analyze_job(
+        c,
+        fetched.as_of,
+        fetched.quality,
+        primary_source_failures=fetched.primary_failures,
+        fallback_calls=fetched.fallback_calls,
+    )
     bundle = report_job(c, result.run_id)
     return send_job(c, bundle)

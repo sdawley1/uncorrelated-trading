@@ -41,3 +41,17 @@ def test_configure_logging_does_not_stack_handlers():
     configure_logging("INFO")
     configure_logging("INFO")
     assert len(logging.getLogger("uncorrelated_trading").handlers) == 1
+
+
+def test_redaction_covers_formatted_exceptions(capsys):
+    add_redaction(["SKEXCSECRET42"])
+    for json_format in (False, True):
+        configure_logging("INFO", json_format=json_format)
+        try:
+            raise RuntimeError("GET https://api.example.com/?apikey=SKEXCSECRET42 failed")
+        except RuntimeError:
+            logging.getLogger("uncorrelated_trading.exc").exception("request failed")
+        err = capsys.readouterr().err
+        assert "SKEXCSECRET42" not in err
+        assert "apikey=***" in err
+        assert "RuntimeError" in err

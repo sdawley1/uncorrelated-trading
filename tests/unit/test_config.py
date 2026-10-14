@@ -326,3 +326,11 @@ def test_missing_service_account_file_rejected(tmp_path):
     }
     with pytest.raises(ConfigError, match="GOOGLE_SERVICE_ACCOUNT_FILE does not exist"):
         Settings.from_env(env=env, dotenv_path=None)
+
+
+def test_ci_uses_matrix_python_and_license_present():
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "UV_PYTHON: ${{ matrix.python }}" in ci
+    license_text = (REPO / "LICENSE").read_text(encoding="utf-8")
+    assert license_text.startswith("MIT License")
+    assert "Copyright (c) 2026 The uncorrelated-trading authors" in license_text

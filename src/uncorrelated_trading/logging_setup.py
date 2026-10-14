@@ -12,7 +12,15 @@ _PACKAGE_LOGGER = "uncorrelated_trading"
 _MASK = "***"
 
 
-class _JsonFormatter(logging.Formatter):
+class _RedactingFormatter(logging.Formatter):
+    """Text formatter that also masks secrets in formatted tracebacks."""
+
+    def formatException(self, ei: Any) -> str:  # noqa: N802 (logging API name)
+        """Format the exception and mask every registered secret."""
+        return _REDACTION.redact(super().formatException(ei))
+
+
+class _JsonFormatter(_RedactingFormatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
             "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
@@ -31,6 +39,10 @@ class _RedactionFilter(logging.Filter):
     def __init__(self) -> None:
         super().__init__()
         self.secrets: set[str] = set()
+
+    def redact(self, text: str) -> str:
+        """Return ``text`` with every registered secret replaced by ``***``."""
+        return self._redact(text) if self.secrets else text
 
     def _redact(self, text: str) -> str:
         # Longest first so a secret that contains another is masked whole.
@@ -80,7 +92,7 @@ def configure_logging(level: str, json_format: bool = False) -> None:
     fmt: logging.Formatter = (
         _JsonFormatter()
         if json_format
-        else logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+        else _RedactingFormatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     )
     handler.setFormatter(fmt)
     logger.addHandler(handler)
@@ -93,7 +105,8 @@ def add_redaction(secrets: Iterable[str]) -> None:
     """Mask the given secret values as ``***`` in all package log output.
 
     Installs a ``logging.Filter`` on the ``uncorrelated_trading`` logger and its handlers that
-    replaces each non-empty secret in ``record.msg`` and in string ``record.args``. Secrets
+    replaces each non-empty secret in ``record.msg`` and in string ``record.args``; the
+    package formatters also mask secrets in formatted exception tracebacks. Secrets
     accumulate across calls and survive later calls to :func:`configure_logging`.
 
     Parameters

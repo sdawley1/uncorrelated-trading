@@ -60,6 +60,8 @@ def run_analysis(
     now_utc: datetime,
     quality_in: Sequence[SymbolQuality] = (),
     run_id: str | None = None,
+    primary_source_failures: int | None = None,
+    fallback_calls: int | None = None,
 ) -> AnalysisResult:
     """Run the full correlation, uncorrelated-set and momentum analysis.
 
@@ -79,6 +81,11 @@ def run_analysis(
         Data-quality records from the fetch step, merged into the report.
     run_id : str or None, optional
         Run identifier; defaults to ``uuid.uuid4().hex``.
+    primary_source_failures : int or None, optional
+        The composite source's primary-failure count for the run; when None, the number of
+        ``fallback_used`` records in ``quality_in`` is used.
+    fallback_calls : int or None, optional
+        The composite source's fallback request count; when None, counted as above.
 
     Returns
     -------
@@ -176,6 +183,14 @@ def run_analysis(
         logger.warning("uncorrelated-set search hit its %.1fs budget", params.search_time_budget_s)
 
     quality = _quality_report(universe, analysed, quality_in, primary, window_drops, momentum_drops)
+    fallbacks = sum(1 for q in quality_in if q.status == "fallback_used")
+    quality = replace(
+        quality,
+        primary_source_failures=(
+            fallbacks if primary_source_failures is None else primary_source_failures
+        ),
+        fallback_calls=fallbacks if fallback_calls is None else fallback_calls,
+    )
     return AnalysisResult(
         run_id=run_id if run_id is not None else uuid.uuid4().hex,
         as_of=as_of,

@@ -3,6 +3,9 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    env:
+      # Every `uv run` step uses the matrix interpreter (not .python-version's 3.12).
+      UV_PYTHON: ${{ matrix.python }}
     strategy:
       fail-fast: false
       matrix:

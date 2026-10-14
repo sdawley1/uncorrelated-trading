@@ -350,23 +350,28 @@ class RunStore:
         )
 
     def latest_run_id(self) -> str | None:
-        """Return the id of the most recently created run, or None if there are none.
+        """Return the id of the latest run by as-of day, or None if there are none.
+
+        Runs are ordered by ``as_of_day``, then ``created_at``, then insertion order, so a
+        historical ``--as-of`` run created later never becomes "latest".
 
         Returns
         -------
         str | None
-            Run id with the greatest ``created_at``.
+            Run id with the greatest ``(as_of_day, created_at)``.
         """
         row = self._one(
-            "SELECT run_id FROM analysis_runs ORDER BY created_at DESC, rowid DESC LIMIT 1", ()
+            "SELECT run_id FROM analysis_runs"
+            " ORDER BY as_of_day DESC, created_at DESC, rowid DESC LIMIT 1",
+            (),
         )
         return None if row is None else str(row["run_id"])
 
     def previous_run_id(self, run_id: str) -> str | None:
         """Return the run created immediately before ``run_id``.
 
-        Runs are ordered by ``created_at`` and then by insertion order, matching
-        :meth:`latest_run_id`.
+        Runs are ordered by ``created_at`` and then by insertion order (creation order, unlike
+        :meth:`latest_run_id`, which ranks by as-of day first).
 
         Parameters
         ----------
@@ -553,6 +558,22 @@ class RunStore:
         """
         row = self._one("SELECT 1 FROM email_log WHERE run_id = ? LIMIT 1", (run_id,))
         return row is not None
+
+    def email_count(self, run_id: str) -> int:
+        """Return the number of ``email_log`` rows for ``run_id``.
+
+        Parameters
+        ----------
+        run_id : str
+            Analysis run.
+
+        Returns
+        -------
+        int
+            Number of logged sends (0 if none).
+        """
+        row = self._one("SELECT COUNT(*) AS n FROM email_log WHERE run_id = ?", (run_id,))
+        return 0 if row is None else int(row["n"])
 
     # -- jobs ---------------------------------------------------------------
 
