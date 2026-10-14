@@ -210,10 +210,19 @@ early closes come from the calendar).
 | `post_close_settling` | within `post_close_settle_minutes` (20) after the close | through today, marked **provisional** (closing prints may still be corrected) |
 | `post_close` | 20 minutes or more after the close | through today |
 
-If, after the close, fewer than half of the universe have a bar for today yet, the fetch
-falls back to the previous trading day and says so in the brief. `--as-of YYYY-MM-DD`
-overrides the resolution; a non-trading date snaps back to the previous trading day with a
-warning. `uv run trader calendar` shows how "now" resolves.
+If, in any mode, fewer than half of the universe have a bar for the resolved day (after the
+close: not yet published; at other times: a provider outage), the fetch falls back to the
+previous trading day and the brief says "bars for D unavailable; using previous session". An
+analysis never labels a run with a day it has no bars for: if the price window does not end
+on the as-of day (for example `trader analyze --as-of D` on stored data without D), it stops
+with "no bars for as-of day D; last available day is X" (exit 4).
+
+`--as-of YYYY-MM-DD` overrides the resolution. Dates are compared with today in the exchange
+timezone; a later date is rejected (exit 2). `--as-of` today resolves exactly like a run
+without `--as-of` (before the open or during the session it uses the previous session; within
+the settle window today is provisional), so an in-progress session is never stored as a
+close. An earlier non-trading date snaps back to the previous trading day with a warning.
+`uv run trader calendar` shows how "now" resolves.
 
 ## Commands
 
@@ -249,7 +258,7 @@ uv run trader report --latest                # workbook into data/reports/
 uv run trader report --run-id 5d083d1d12fa4045a7b421ad9d898904 --out ~/Desktop
 uv run trader send --latest --dry-run        # .eml + .xlsx into data/outbox/, not recorded as sent
 uv run trader send --latest                  # exits 5 if this run was already sent ...
-uv run trader send --latest --force          # ... unless forced
+uv run trader send --latest --force          # ... unless forced (resends, new idempotency key)
 uv run trader daily --dry-run
 uv run trader daily --as-of 2026-10-13
 uv run trader --log-level DEBUG --log-format json daily
@@ -266,6 +275,11 @@ writes the email to `<data_dir>/outbox/` and does not need email settings.
 report, running the full daily job first if there is none). Each job runs at most once per
 local date, even across restarts; a run missed while the machine slept is made up on wake if
 it is within the misfire grace (6 h refresh, 3 h send), otherwise it is logged and skipped.
+A job that fails with a transient error (network down, SMTP 4xx or timeout, Alpaca 5xx, a
+locked database) is retried every 5 minutes while it is still within its grace; other
+failures (wrong password, analysis error) are final for that date. "Latest" means the run
+with the most recent as-of day, so a historical `--as-of` run never replaces it. The Google
+Sheet is published once a day, by **send**.
 
 ## Configuration
 
@@ -276,7 +290,14 @@ Two sources, kept apart:
   win over `.env`.
 - `config/default.toml`: universe, data, analysis, schedule and report parameters
   (non-secret, committed). Missing keys fall back to built-in defaults; unknown keys are
-  errors.
+  errors. When neither `UT_CONFIG_FILE` nor `--config` is set and there is no
+  `./config/default.toml` (for example when `trader` runs outside the repository), an
+  identical copy shipped inside the package is used; `trader check-config` prints which file
+  was read and marks the packaged one "(packaged default)".
+
+Placeholder values copied unchanged from `.env.example` (runs of `X`/`x` such as
+`PKXXXXXXXX`, and paths under `/path/to/`) are rejected with "KEY looks like a placeholder
+from .env.example". With Sheets enabled, `GOOGLE_SERVICE_ACCOUNT_FILE` must exist.
 
 Every variable and key with its default and meaning is listed in
 [`docs/configuration.md`](docs/configuration.md). To change the universe or thresholds, copy
@@ -298,7 +319,8 @@ Every variable and key with its default and meaning is listed in
   call (2 requests per day in steady state for 80 symbols). Twelve Data's free plan allows
   8 credits per minute and 800 per day (one credit per symbol); the bot uses at most 7 per
   minute and 750 per day, with the daily count persisted in SQLite so restarts do not reset
-  it. At most 20 fallback symbols are fetched per run.
+  it. At most 20 fallback symbols are fetched per run (counted across the main fetch and
+  the per-symbol retries; retries and restatement re-fetches are not cross-checked).
 - **Cross-check rotation.** When a Twelve Data key is set, each run compares the last three
   closes of `ceil(N * crosscheck_fraction)` symbols (16 of 80 by default) with Twelve Data,
   rotating deterministically through the universe so each symbol is checked about once a
@@ -326,7 +348,7 @@ Every variable and key with its default and meaning is listed in
 | 1 | unexpected error | a bug; the traceback is logged |
 | 2 | configuration or usage error | missing or malformed `.env` variable, invalid TOML value, bad command-line option |
 | 3 | data or storage error | Alpaca/Twelve Data unreachable or rejecting the keys, no stored run for `--latest`, database problem |
-| 4 | analysis error | fewer than 3 symbols with enough history |
+| 4 | analysis error | fewer than 3 symbols with enough history, no bars for the as-of day |
 | 5 | report or email error | SMTP/Resend failure (logged as "retryable" when a later retry may succeed), run already sent, workbook error |
 
 Schedulers such as cron can retry on 3 and 5; 2 needs a human.
@@ -344,7 +366,7 @@ Schedulers such as cron can retry on 3 and 5; 2 needs a human.
 | Gmail `535 5.7.8 Username and Password not accepted` | Use a 16-character app password with 2-Step Verification on; `SMTP_USERNAME` is the full Gmail address. |
 | Resend 403 "You can only send testing emails to your own email address" | Unverified Resend account: send from `onboarding@resend.dev` to your signup address, or verify a domain. |
 | Log shows `Google Sheets publish failed` (the email is still sent) | Share the sheet with the service account email as Editor, enable both the Sheets and Drive APIs, check `GOOGLE_SHEET_ID`, and install the extra with `uv sync --all-extras`. |
-| `send` exits 5 saying the run was already sent | Sends are recorded once per run; use `--force` to resend deliberately. |
+| `send` exits 5 saying the run was already sent | Sends are recorded once per run; use `--force` to resend deliberately (the Resend idempotency key gets a `-f<N>` suffix so the resend is not replayed). |
 | `no analysis runs stored yet` | Run `trader analyze` or `trader daily` first. |
 | `database is locked` or a corrupt database | Only one scheduler should run per data directory; move `UT_DATA_DIR` off cloud-synced folders. |
 | Scheduled run never happened | The machine was asleep beyond the misfire grace; see [`docs/operations.md`](docs/operations.md). |
@@ -406,4 +428,4 @@ Tests whose secret is missing are skipped, not failed. The `ci` workflow needs n
 
 ## License
 
-MIT (declared in `pyproject.toml`).
+MIT; see [`LICENSE`](LICENSE).

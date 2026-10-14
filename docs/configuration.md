@@ -7,7 +7,10 @@ Configuration comes from two places, kept strictly apart:
    python-dotenv; variables already set in the process environment always win over it.
    `.env` is git-ignored; start from `.env.example`.
 2. **A TOML file** (non-secret parameters), read by `config.AppConfig.load`. The default is
-   `config/default.toml`; choose another with `UT_CONFIG_FILE` or `trader --config PATH`.
+   `config/default.toml` in the working directory; when that file does not exist, the
+   identical copy shipped inside the package (`uncorrelated_trading/config_default.toml`) is
+   used, so `trader` works outside the repository. Choose another file with
+   `UT_CONFIG_FILE` or `trader --config PATH`. `trader check-config` prints the file used.
    Missing sections and keys fall back to the defaults below, so a partial file is valid.
    Unknown sections or keys, wrong types and out-of-range values are errors.
 
@@ -16,7 +19,11 @@ Both loaders report every problem at once (`trader check-config` prints them and
 ## Environment variables
 
 Booleans accept `1/true/yes/on` and `0/false/no/off` (case-insensitive). Blank values count
-as unset.
+as unset. Values left as `.env.example` placeholders are errors ("KEY looks like a
+placeholder from .env.example"): a run of at least 8 `X` or `x` characters, optionally after
+a short prefix such as `PK` or `re_`, and any path starting with `/path/to/`. This is checked
+for the Alpaca keys (when required), the email secrets (when email is required),
+`TWELVEDATA_API_KEY`, `GOOGLE_SHEET_ID` and `GOOGLE_SERVICE_ACCOUNT_FILE`.
 
 | Variable | Required when | Default | Meaning |
 |---|---|---|---|
@@ -33,10 +40,10 @@ as unset.
 | `SMTP_PASSWORD` | `EMAIL_BACKEND=smtp` (and email required) | unset | SMTP password; for Gmail a 16-character app password. |
 | `SMTP_USE_SSL` | never | `false` | `true` uses implicit SSL (port 465) instead of STARTTLS. |
 | `RESEND_API_KEY` | `EMAIL_BACKEND=resend` (and email required) | unset | Resend API key (`re_...`). |
-| `GOOGLE_SERVICE_ACCOUNT_FILE` | never | unset | Path to a Google service-account JSON key. Sheets push is on only when this and `GOOGLE_SHEET_ID` are both set. |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` | never | unset | Path to a Google service-account JSON key. Sheets push is on only when this and `GOOGLE_SHEET_ID` are both set; the file must then exist. |
 | `GOOGLE_SHEET_ID` | never | unset | ID of the target Google Sheet (shared with the service account as Editor). |
 | `UT_DATA_DIR` | never | `data` | Directory for the SQLite database `uncorrelated_trading.sqlite3`, `outbox/` and `reports/`. Overridden by `--data-dir`. Keep it off cloud-synced folders. |
-| `UT_CONFIG_FILE` | never | `config/default.toml` | TOML configuration file. Overridden by `--config`. |
+| `UT_CONFIG_FILE` | never | `config/default.toml` if it exists, else the packaged copy | TOML configuration file. Overridden by `--config`. |
 | `UT_TIMEZONE` | never | `America/New_York` | Exchange timezone (IANA name) for the schedule and as-of resolution. |
 | `LOG_LEVEL` | never | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. Overridden by `--log-level`. |
 | `LOG_FORMAT` | never | `text` | `text` or `json` (one JSON object per line). Overridden by `--log-format`. Read by the CLI, not by `Settings`. |
@@ -69,7 +76,7 @@ Integration tests additionally read `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPA
 | `alpaca_symbols_per_request` | `40` | Maximum symbols per multi-symbol bars request. |
 | `twelvedata_requests_per_minute` | `7` | Token-bucket rate for Twelve Data (the free plan allows 8 credits per minute). |
 | `twelvedata_requests_per_day` | `750` | Daily Twelve Data budget persisted in SQLite (the free plan allows 800). |
-| `twelvedata_fallback_max_per_run` | `20` | Maximum symbols fetched from Twelve Data as fallback per run. Integer >= 0. |
+| `twelvedata_fallback_max_per_run` | `20` | Maximum symbols fetched from Twelve Data as fallback per run (across the main fetch and the per-symbol retries). Integer >= 0. |
 | `crosscheck_fraction` | `0.2` | Share of the universe whose closes are cross-checked against Twelve Data per run (`ceil(N * fraction)` symbols, rotating daily). In [0, 1]. |
 | `close_mismatch_tolerance` | `0.005` | Relative close difference that flags `close_mismatch` (cross-check) or a restatement (stored vs re-fetched). In [0, 1]. |
 | `post_close_settle_minutes` | `20` | Minutes after the close during which today's bars are marked provisional (`post_close_settling`). Integer >= 0. |
@@ -104,7 +111,7 @@ Used by `trader run`. Times are `HH:MM` in the exchange timezone (`UT_TIMEZONE`)
 | `send_time` | `"07:00"` | Daily send of the latest unsent report. |
 | `send_on_days` | `"weekdays"` | Days the send job runs: `weekdays`, `trading_days` or `every_day`. |
 | `poll_seconds` | `30` | Scheduler wake-up interval; the wall clock is re-read each time, so sleep/wake is noticed within this delay. |
-| `send_misfire_grace_hours` | `3` | A send missed (machine off or asleep) is still made if the scheduler notices within this many hours. Integer >= 0. |
+| `send_misfire_grace_hours` | `3` | A send missed (machine off or asleep) is still made if the scheduler notices within this many hours; a send failing with a transient error is retried every 5 minutes within the same window. Integer >= 0. |
 | `refresh_misfire_grace_hours` | `6` | Same for the refresh job. Integer >= 0. |
 
 ### `[report]`

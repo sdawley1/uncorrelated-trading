@@ -7,7 +7,9 @@ There are two ways to run the bot unattended:
   trading days and sends at `schedule.send_time` (07:00) on `schedule.send_on_days`, both in
   the exchange timezone. Each job runs at most once per local date even across restarts, and
   a run missed during sleep is made up on wake within the misfire grace (6 h refresh, 3 h
-  send).
+  send). A job failing with a transient error (network not yet up after wake, SMTP 4xx,
+  Alpaca 5xx, locked database) is retried every 5 minutes within the same grace; a job
+  left `running` by a crash is reclaimed once it is older than the grace.
 - **Option 2: two one-shot commands** from cron or Task Scheduler:
   `uv run trader daily` after the close and `uv run trader send --latest` in the morning.
 

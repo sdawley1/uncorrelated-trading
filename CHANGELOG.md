@@ -6,6 +6,38 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- A run is never labelled with an as-of day it has no bars for: `run_analysis` raises
+  "no bars for as-of day D; last available day is X", and the fetch falls back to the
+  previous session in every mode (not only after the close) when fewer than half of the
+  universe have a bar for the day.
+- `trader run` retries jobs that fail with a transient error every 5 minutes within the
+  misfire grace (status `retry`); stale `running` rows left by a crash are reclaimed.
+- `--as-of` is compared with today in the exchange timezone; `--as-of` today resolves like a
+  run without override, so an in-progress session is never stored as a close.
+- The cached Alpaca calendar refreshes again in long-running processes (remote attempts at
+  most once a day) instead of degrading to the static calendar after about 60 days.
+- Price windows use the days on which at least half of the symbols have a bar, so one stray
+  bar on an extra day no longer drops every other symbol.
+- The 20-symbol Twelve Data fallback cap applies per run, across per-symbol retries, and
+  retries are no longer cross-checked.
+- `send --latest` and the scheduler pick the run with the latest as-of day, not the most
+  recently created one.
+- `send --force` uses a fresh idempotency key (`-f<N>` suffix), so Resend really resends.
+- Secrets are masked in logged exception tracebacks.
+- Data Quality reports the data source's real primary-failure and fallback-call counts.
+- The scheduler publishes the Google Sheet once a day (by `send`), not twice.
+- CI runs every step on the matrix Python version.
+
+### Added
+
+- The default configuration ships inside the package and is used when
+  `./config/default.toml` is absent; `check-config` shows which file was read.
+- Placeholder values copied from `.env.example` are rejected; with Sheets enabled the
+  service-account file must exist.
+- `LICENSE` (MIT).
+
 ## [0.1.0] - 2026-10-14
 
 First release. Advisory only: the program reads market data and account balances and never
