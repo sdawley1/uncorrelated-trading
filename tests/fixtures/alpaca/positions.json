@@ -1,0 +1,42 @@
+[
+  {
+    "asset_id": "00000000-0000-4000-8000-000000000001",
+    "symbol": "XOM",
+    "exchange": "NYSE",
+    "asset_class": "us_equity",
+    "asset_marginable": true,
+    "qty": "3",
+    "avg_entry_price": "110.5",
+    "side": "long",
+    "market_value": "337.2",
+    "cost_basis": "331.5",
+    "unrealized_pl": "5.7",
+    "unrealized_plpc": "0.0171945701357466",
+    "unrealized_intraday_pl": "1.2",
+    "unrealized_intraday_plpc": "0.0035714285714286",
+    "current_price": "112.4",
+    "lastday_price": "112",
+    "change_today": "0.0035714285714286",
+    "qty_available": "3"
+  },
+  {
+    "asset_id": "00000000-0000-4000-8000-000000000002",
+    "symbol": "XLE",
+    "exchange": "ARCA",
+    "asset_class": "us_equity",
+    "asset_marginable": true,
+    "qty": "2",
+    "avg_entry_price": "90",
+    "side": "long",
+    "market_value": "177.4",
+    "cost_basis": "180",
+    "unrealized_pl": "-2.6",
+    "unrealized_plpc": "-0.0144444444444444",
+    "unrealized_intraday_pl": "-0.4",
+    "unrealized_intraday_plpc": "-0.0022497187851519",
+    "current_price": "88.7",
+    "lastday_price": "88.9",
+    "change_today": "-0.0022497187851519",
+    "qty_available": "2"
+  }
+]
