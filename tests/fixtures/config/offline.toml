@@ -1,0 +1,8 @@
+# Small offline configuration used by the end-to-end and CLI tests with tests/fixtures/csv.
+[universe]
+symbols = ["S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08", "S09", "S10"]
+
+[analysis]
+windows = [60, 120]
+primary_window = 60
+search_time_budget_s = 5.0

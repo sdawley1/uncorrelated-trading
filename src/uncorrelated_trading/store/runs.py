@@ -352,6 +352,31 @@ class RunStore:
         )
         return None if row is None else str(row["run_id"])
 
+    def previous_run_id(self, run_id: str) -> str | None:
+        """Return the run created immediately before ``run_id``.
+
+        Runs are ordered by ``created_at`` and then by insertion order, matching
+        :meth:`latest_run_id`.
+
+        Parameters
+        ----------
+        run_id : str
+            Reference run.
+
+        Returns
+        -------
+        str | None
+            Id of the preceding run, or None if ``run_id`` is the first run or unknown.
+        """
+        row = self._one(
+            "SELECT p.run_id FROM analysis_runs AS p JOIN analysis_runs AS c ON c.run_id = ?"
+            " WHERE p.created_at < c.created_at"
+            " OR (p.created_at = c.created_at AND p.rowid < c.rowid)"
+            " ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1",
+            (run_id,),
+        )
+        return None if row is None else str(row["run_id"])
+
     # -- portfolio ----------------------------------------------------------
 
     def save_portfolio(self, run_id: str, ctx: PortfolioContext) -> None:

@@ -259,3 +259,21 @@ def test_api_usage(store: RunStore):
     assert store.api_usage_today("twelvedata", day) == 7
     assert store.api_usage_today("twelvedata", date(2026, 10, 15)) == 0
     assert store.api_usage_today("alpaca", day) == 0
+
+
+def test_previous_run_id(store: RunStore):
+    assert store.previous_run_id("missing") is None
+    store.save_analysis(make_result("old", NOW - timedelta(days=1)))
+    store.save_analysis(make_result("new", NOW))
+    store.save_analysis(make_result("older", NOW - timedelta(days=2)))
+    assert store.previous_run_id("new") == "old"
+    assert store.previous_run_id("old") == "older"
+    assert store.previous_run_id("older") is None
+    assert store.previous_run_id("missing") is None
+
+
+def test_previous_run_id_same_created_at_uses_insertion_order(store: RunStore):
+    store.save_analysis(make_result("first", NOW))
+    store.save_analysis(make_result("second", NOW))
+    assert store.previous_run_id("second") == "first"
+    assert store.previous_run_id("first") is None
