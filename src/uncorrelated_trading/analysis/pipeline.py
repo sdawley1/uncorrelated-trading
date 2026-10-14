@@ -21,7 +21,7 @@ from datetime import date, datetime
 
 from uncorrelated_trading.analysis.correlation import correlation_matrix
 from uncorrelated_trading.analysis.momentum import momentum_scores
-from uncorrelated_trading.analysis.returns import build_price_matrix, log_returns
+from uncorrelated_trading.analysis.returns import build_price_matrix, log_returns, window_days
 from uncorrelated_trading.analysis.uncorrelated import search_uncorrelated_sets
 from uncorrelated_trading.errors import AnalysisError
 from uncorrelated_trading.models import (
@@ -198,10 +198,8 @@ def run_analysis(
 
 
 def _available_returns(bars: Sequence[Bar], universe: Sequence[str], end_day: date) -> int:
-    """Count the daily returns supported by the distinct trading days up to ``end_day``."""
-    wanted = set(universe)
-    days = {b.day for b in bars if b.symbol in wanted and b.day <= end_day}
-    return max(len(days) - 1, 0)
+    """Count the daily returns supported by the window days up to ``end_day``."""
+    return max(len(window_days(bars, universe, end_day)) - 1, 0)
 
 
 def _momentum(

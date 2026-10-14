@@ -260,3 +260,12 @@ def test_as_of_day_without_bars_raises() -> None:
         AnalysisError, match="no bars for as-of day 2026-10-14; last available day is 2026-10-13"
     ):
         run_analysis(bars, SYMBOLS, as_of(missing), params(), NOW, quality_in=quality_in)
+
+
+def test_stray_extra_day_bar_does_not_abort_run() -> None:
+    # A single fallback bar on a day nobody else traded must not drop every other symbol.
+    bars = make_bars(SYMBOLS, 300, seed=17)
+    stray = Bar("S01", date(2026, 10, 10), 50.0, 51.0, 49.0, 50.0, 1, "twelvedata")  # Saturday
+    result = run_analysis([*bars, stray], SYMBOLS, as_of(), params(), NOW)
+    assert result.quality.analysed == tuple(SYMBOLS)
+    assert matrix(result.correlations, 60, "pearson").end_day == END

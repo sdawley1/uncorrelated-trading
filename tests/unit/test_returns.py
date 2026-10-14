@@ -119,3 +119,14 @@ def test_log_returns_of_constant_prices_is_zero() -> None:
     rets = log_returns(prices)
     assert rets.shape == (4, 2)
     assert (rets.to_numpy() == 0.0).all()
+
+
+def test_stray_bar_on_extra_day_does_not_drop_other_symbols() -> None:
+    # One fallback bar for S01 on a day nobody else traded (I4): the window is unchanged.
+    symbols = [f"S{i:02d}" for i in range(10)]
+    bars = make_bars(symbols, 80, seed=21)
+    stray = Bar("S01", date(2026, 10, 14), 50.0, 51.0, 49.0, 50.0, 1, "twelvedata")
+    res = build_price_matrix([*bars, stray], symbols, date(2026, 10, 14), 60)
+    assert res.prices.index[-1] == END
+    assert list(res.prices.columns) == symbols
+    assert res.dropped == ()

@@ -1,7 +1,7 @@
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from conftest import make_bars
@@ -62,3 +62,29 @@ def test_log_returns_scale_invariant(params: tuple[int, int, int], scale: float)
     np.testing.assert_allclose(
         log_returns(scaled).to_numpy(), log_returns(prices.prices).to_numpy(), atol=1e-9
     )
+
+
+@settings(max_examples=50, deadline=None)
+@given(universes, st.data())
+def test_extra_day_bar_for_one_symbol_changes_nothing_else(
+    params: tuple[int, int, int], data: st.DataObject
+) -> None:
+    n_sym, n_bars, seed = params
+    symbols = [f"S{i}" for i in range(n_sym)]
+    bars = make_bars(symbols, n_bars, seed=seed)
+    n_days = data.draw(st.integers(min_value=1, max_value=n_bars - 1))
+    days = sorted({b.day for b in bars})
+    victim = data.draw(st.sampled_from(symbols))
+    offset = data.draw(st.integers(min_value=-10, max_value=(END - days[0]).days))
+    extra_day = days[0] + timedelta(days=offset)
+    assume(extra_day not in set(days))
+    stray = Bar(victim, extra_day, 50.0, 51.0, 49.0, 50.0, 1, "twelvedata")
+    base = build_price_matrix(bars, symbols, END, n_days)
+    res = build_price_matrix([*bars, stray], symbols, END, n_days)
+    assert list(res.prices.index) == list(base.prices.index)
+    others = [s for s in base.prices.columns if s != victim]
+    assert [s for s in res.prices.columns if s != victim] == others
+    np.testing.assert_array_equal(res.prices[others].to_numpy(), base.prices[others].to_numpy())
+    assert [q for q in res.dropped if q.symbol != victim] == [
+        q for q in base.dropped if q.symbol != victim
+    ]

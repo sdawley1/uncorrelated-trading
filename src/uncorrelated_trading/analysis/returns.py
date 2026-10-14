@@ -1,7 +1,9 @@
 """Close-price matrix construction and daily log returns.
 
 ``build_price_matrix`` aligns daily closes of the requested symbols on a common window of
-trading days (the union of days observed across those symbols). Symbols with gaps in the
+trading days: the days on which at least half of the requested symbols that have any bars
+have a bar (:func:`window_days`), so a stray bar of one symbol on an extra day (a fallback
+provider's holiday bar, a stray CSV row) cannot shift the window. Symbols with gaps in the
 window are dropped, never forward-filled, and reported as :class:`SymbolQuality` records.
 ``log_returns`` turns the aligned prices into daily log returns.
 """
@@ -18,7 +20,7 @@ import pandas as pd
 from uncorrelated_trading.errors import AnalysisError
 from uncorrelated_trading.models import Bar, SymbolQuality
 
-__all__ = ["PriceMatrixResult", "build_price_matrix", "log_returns"]
+__all__ = ["PriceMatrixResult", "build_price_matrix", "log_returns", "window_days"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +52,42 @@ def _unique(symbols: Sequence[str]) -> list[str]:
     return out
 
 
+def _day_counts(closes: dict[str, dict[date, float]]) -> list[date]:
+    """Return the days on which at least half of the symbols with any bars have a bar."""
+    n_with_bars = sum(1 for per in closes.values() if per)
+    counts: dict[date, int] = {}
+    for per in closes.values():
+        for d in per:
+            counts[d] = counts.get(d, 0) + 1
+    return sorted(d for d, n in counts.items() if 2 * n >= n_with_bars)
+
+
+def window_days(bars: Sequence[Bar], symbols: Sequence[str], end_day: date) -> list[date]:
+    """Return the candidate window days up to ``end_day``, ascending.
+
+    Parameters
+    ----------
+    bars : Sequence[Bar]
+        Daily bars; bars of other symbols or after ``end_day`` are ignored.
+    symbols : Sequence[str]
+        Requested symbols.
+    end_day : date
+        Last day to consider.
+
+    Returns
+    -------
+    list[date]
+        Days on which at least half of the requested symbols that have any bar up to
+        ``end_day`` have a bar. Bars of a symbol on other days never shape the window.
+    """
+    wanted = set(symbols)
+    closes: dict[str, dict[date, float]] = {s: {} for s in wanted}
+    for bar in bars:
+        if bar.symbol in wanted and bar.day <= end_day:
+            closes[bar.symbol][bar.day] = float(bar.close)
+    return _day_counts(closes)
+
+
 def build_price_matrix(
     bars: Sequence[Bar], symbols: Sequence[str], end_day: date, n_days: int
 ) -> PriceMatrixResult:
@@ -70,14 +108,16 @@ def build_price_matrix(
     Returns
     -------
     PriceMatrixResult
-        Prices of the symbols that have a bar on every window day, plus drop records. A
+        Prices of the symbols that have a bar on every window day, plus drop records. The
+        window is the last ``n_days + 1`` days of :func:`window_days`; bars on other days are
+        ignored. A
         symbol whose first bar is after the window start is ``dropped_short_history``; any
         other symbol lacking a window day is ``dropped_missing``.
 
     Raises
     ------
     AnalysisError
-        If ``n_days < 1`` or fewer than ``n_days + 1`` distinct trading days are observed.
+        If ``n_days < 1`` or fewer than ``n_days + 1`` window days are observed.
     """
     if n_days < 1:
         raise AnalysisError(f"n_days must be >= 1, got {n_days}")
@@ -95,7 +135,7 @@ def build_price_matrix(
             first_day[bar.symbol] = bar.day
         sources[bar.symbol] = bar.source
 
-    all_days = sorted({d for per in closes.values() for d in per})
+    all_days = _day_counts(closes)
     n_rows = n_days + 1
     if len(all_days) < n_rows:
         raise AnalysisError(
