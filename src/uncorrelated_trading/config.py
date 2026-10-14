@@ -57,6 +57,13 @@ _LOCAL_CONFIG = Path("config/default.toml")
 _PACKAGED_CONFIG = "config_default.toml"
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 _HHMM_RE = re.compile(r"^(\d{2}):(\d{2})$")
+# ``.env.example`` placeholders: a run of 8+ X (or x), optionally after a short key prefix such
+# as ``PK`` or ``re_``; and ``/path/to/...`` file paths.
+_PLACEHOLDER_RE = re.compile(r"^(?:[A-Za-z]{1,2}_?)?(?:X{8,}|x{8,})$")
+_PLACEHOLDER_PATH_PREFIX = "/path/to/"
+_ALPACA_SECRETS = ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")
+_EMAIL_SECRETS = ("SMTP_PASSWORD", "RESEND_API_KEY")
+_OPTIONAL_SECRETS = ("TWELVEDATA_API_KEY", "GOOGLE_SHEET_ID", "GOOGLE_SERVICE_ACCOUNT_FILE")
 _MIN_SYMBOLS = 2
 _MAX_SYMBOLS = 200
 
@@ -83,6 +90,24 @@ def default_config_path() -> Path:
         else :func:`packaged_config_path`.
     """
     return _LOCAL_CONFIG if _LOCAL_CONFIG.is_file() else packaged_config_path()
+
+
+def is_placeholder(value: str) -> bool:
+    """Return True when ``value`` looks like a placeholder copied from ``.env.example``.
+
+    Parameters
+    ----------
+    value : str
+        Stripped environment value.
+
+    Returns
+    -------
+    bool
+        True for a run of at least 8 ``X`` (or ``x``) characters, optionally after a short
+        prefix such as ``PK`` or ``re_`` (``PKXXXXXXXX``), and for paths starting with
+        ``/path/to/``.
+    """
+    return value.startswith(_PLACEHOLDER_PATH_PREFIX) or bool(_PLACEHOLDER_RE.match(value))
 
 
 class _Unset(enum.Enum):
@@ -290,6 +315,19 @@ class _SettingsParser:
             self.problems.append(f"{key} is required{reason} but not set")
         return value
 
+    def reject_placeholders(self, keys: tuple[str, ...]) -> set[str]:
+        """Record a problem for each of ``keys`` whose value is an ``.env.example`` placeholder.
+
+        Returns the keys that were rejected.
+        """
+        rejected: set[str] = set()
+        for key in keys:
+            value = self.get(key)
+            if value is not None and is_placeholder(value):
+                self.problems.append(f"{key} looks like a placeholder from .env.example")
+                rejected.add(key)
+        return rejected
+
     def boolean(self, key: str, default: bool) -> bool:
         """Parse a boolean variable (``1/true/yes/on`` or ``0/false/no/off``)."""
         raw = self.get(key)
@@ -373,6 +411,20 @@ class _SettingsParser:
         smtp_password = self.required("SMTP_PASSWORD", smtp_needed, " for EMAIL_BACKEND=smtp")
         resend_key = self.required("RESEND_API_KEY", resend_needed, " for EMAIL_BACKEND=resend")
         sa_file = self.get("GOOGLE_SERVICE_ACCOUNT_FILE")
+        keys: tuple[str, ...] = _OPTIONAL_SECRETS
+        if self.require_alpaca:
+            keys = (*_ALPACA_SECRETS, *keys)
+        if self.require_email:
+            keys = (*keys, *_EMAIL_SECRETS)
+        rejected = self.reject_placeholders(keys)
+        sheet_id = self.get("GOOGLE_SHEET_ID")
+        if (
+            sa_file is not None
+            and sheet_id is not None
+            and "GOOGLE_SERVICE_ACCOUNT_FILE" not in rejected
+            and not Path(sa_file).is_file()
+        ):
+            self.problems.append(f"GOOGLE_SERVICE_ACCOUNT_FILE does not exist: {sa_file}")
         settings = Settings(
             alpaca_api_key=api_key,
             alpaca_secret_key=secret_key,

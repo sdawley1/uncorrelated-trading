@@ -117,15 +117,17 @@ def test_defaults_and_optional_values():
     assert s.sheets_enabled is False
 
 
-def test_sheets_enabled_needs_both_vars():
+def test_sheets_enabled_needs_both_vars(tmp_path):
     one = Settings.from_env(env={**GOOD_ENV, "GOOGLE_SHEET_ID": "sheet"}, dotenv_path=None)
     assert one.sheets_enabled is False
+    key_file = tmp_path / "sa.json"
+    key_file.write_text("{}", encoding="utf-8")  # must exist since the final fix wave (L2)
     both = Settings.from_env(
-        env={**GOOD_ENV, "GOOGLE_SHEET_ID": "sheet", "GOOGLE_SERVICE_ACCOUNT_FILE": "sa.json"},
+        env={**GOOD_ENV, "GOOGLE_SHEET_ID": "sheet", "GOOGLE_SERVICE_ACCOUNT_FILE": str(key_file)},
         dotenv_path=None,
     )
     assert both.sheets_enabled is True
-    assert both.google_service_account_file == Path("sa.json")
+    assert both.google_service_account_file == key_file
 
 
 @pytest.mark.parametrize(
@@ -272,3 +274,55 @@ def test_local_config_preferred_over_packaged(tmp_path, monkeypatch):
     assert s.config_file == Path("config/default.toml")
     explicit = Settings.from_env(env={**GOOD_ENV, "UT_CONFIG_FILE": "x.toml"}, dotenv_path=None)
     assert explicit.config_file == Path("x.toml")
+
+
+# ----------------------------------------------------------------------------- placeholders
+
+
+def test_env_example_copied_verbatim_is_rejected(tmp_path):
+    dotenv = tmp_path / ".env"
+    dotenv.write_bytes((REPO / ".env.example").read_bytes())
+    with pytest.raises(ConfigError) as ei:
+        Settings.from_env(env={}, dotenv_path=dotenv)
+    msg = str(ei.value)
+    for key in (
+        "ALPACA_API_KEY",
+        "ALPACA_SECRET_KEY",
+        "TWELVEDATA_API_KEY",
+        "SMTP_PASSWORD",
+        "GOOGLE_SHEET_ID",
+        "GOOGLE_SERVICE_ACCOUNT_FILE",
+    ):
+        assert f"{key} looks like a placeholder from .env.example" in msg
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("ALPACA_API_KEY", "XXXXXXXX"),
+        ("ALPACA_SECRET_KEY", "xxxxxxxxxxxxxxxx"),
+        ("ALPACA_API_KEY", "PKXXXXXXXXXXXXXXXXXX"),
+        ("TWELVEDATA_API_KEY", "XXXXXXXXXXXXXXXX"),
+        ("SMTP_PASSWORD", "xxxxxxxxxxxxxxxx"),
+        ("GOOGLE_SERVICE_ACCOUNT_FILE", "/path/to/service-account.json"),
+    ],
+)
+def test_placeholder_values_rejected(key, value):
+    with pytest.raises(ConfigError, match=f"{key} looks like a placeholder from .env.example"):
+        Settings.from_env(env={**GOOD_ENV, key: value}, dotenv_path=None)
+
+
+@pytest.mark.parametrize("value", ["XXXXXXX", "PKAB12XXXXXXXXXXCD", "XXXXXXXXa", "PKXXXXxxxxXXXX"])
+def test_non_placeholder_values_accepted(value):
+    s = Settings.from_env(env={**GOOD_ENV, "ALPACA_API_KEY": value}, dotenv_path=None)
+    assert s.alpaca_api_key == value
+
+
+def test_missing_service_account_file_rejected(tmp_path):
+    env = {
+        **GOOD_ENV,
+        "GOOGLE_SHEET_ID": "sheet",
+        "GOOGLE_SERVICE_ACCOUNT_FILE": str(tmp_path / "missing.json"),
+    }
+    with pytest.raises(ConfigError, match="GOOGLE_SERVICE_ACCOUNT_FILE does not exist"):
+        Settings.from_env(env=env, dotenv_path=None)
