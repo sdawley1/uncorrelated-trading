@@ -1,11 +1,17 @@
 name: integration
 on:
   schedule:
-    - cron: "0 2 * * 1-5"
+    - cron: "0 2 * * 1-5"   # 02:00 UTC, Monday to Friday
   workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: integration
+  cancel-in-progress: false
 jobs:
   integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

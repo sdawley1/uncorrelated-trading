@@ -332,13 +332,13 @@ Exceptions (`errors.py`): `UncorrelatedTradingError` base; `ConfigError`; `DataS
 # Equity-only energy, metals/mining, agriculture, materials, plus equity-holding sector ETFs.
 symbols = [
   # Integrated / E&P / services / refining / midstream
-  "XOM","CVX","COP","EOG","OXY","DVN","FANG","HES","APA","CTRA","EQT","AR","RRC",
+  "XOM","CVX","COP","EOG","OXY","DVN","FANG","APA","CTRA","EQT","AR","RRC",
   "SLB","HAL","BKR","MPC","PSX","VLO","KMI","WMB","OKE","LNG","TRGP",
   # Solar / clean energy equities
   "FSLR","ENPH",
   # Metals and mining
-  "FCX","NEM","SCCO","AA","CLF","X","NUE","STLD","RS","MP","ALB","SQM",
-  "GOLD","AEM","WPM","RGLD","HL","CDE","PAAS","VALE","RIO","BHP",
+  "FCX","NEM","SCCO","AA","CLF","NUE","STLD","RS","MP","ALB","SQM",
+  "AEM","WPM","RGLD","HL","CDE","PAAS","VALE","RIO","BHP",
   # Agriculture and ag-chemicals
   "ADM","BG","CF","MOS","NTR","CTVA","FMC","DE","AGCO","TSN","INGR","DAR",
   # Industrial materials and chemicals
@@ -370,7 +370,6 @@ tau_spearman = 0.30
 max_set_size_exact = 4
 max_sets_per_size = 50
 search_time_budget_s = 20.0
-min_history_fraction = 1.0         # symbol dropped if fewer bars than window
 momentum_k = 20
 momentum_long = 120
 momentum_skip = 20

@@ -40,7 +40,6 @@ tau_spearman = 0.30
 max_set_size_exact = 4
 max_sets_per_size = 50
 search_time_budget_s = 20.0
-min_history_fraction = 1.0         # symbol dropped if fewer bars than window
 momentum_k = 20
 momentum_long = 120
 momentum_skip = 20

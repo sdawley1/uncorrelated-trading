@@ -68,7 +68,10 @@ markers = [
   "integration: hits real external APIs; needs credentials",
   "slow: takes more than a few seconds",
 ]
-filterwarnings = ["error::DeprecationWarning:uncorrelated_trading.*"]
+filterwarnings = [
+  "error::DeprecationWarning:uncorrelated_trading.*",
+  "ignore:websockets.legacy is deprecated:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["uncorrelated_trading"]
