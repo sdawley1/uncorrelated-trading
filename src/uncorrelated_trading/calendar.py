@@ -11,8 +11,9 @@ Two calendars are provided:
   https://www.nyse.com/markets/hours-calendars). It cannot know ad hoc closures (for example
   national days of mourning), so it is the fallback.
 * :class:`CachedCalendar` serves rows cached in a :class:`CalendarStore` (the SQLite
-  ``calendar_days`` table), refreshing them from the Alpaca calendar at most once per
-  ``max_age_days``, and falls back to :class:`StaticCalendar` when Alpaca is unavailable.
+  ``calendar_days`` table), refreshing them from the Alpaca calendar when older than
+  ``max_age_days`` (remote attempts at least a day apart), and falls back to
+  :class:`StaticCalendar` when Alpaca is unavailable.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ _EARLY_CLOSE = time(13, 0)
 _LOOKBACK_DAYS = 10
 _PREVIOUS_DAY_MAX_STEPS = 40  # 40 windows of 10 days: more than a year of lookback
 _COVERAGE_MARGIN_DAYS = 10  # longer than any gap between consecutive NYSE sessions
+_REMOTE_RETRY_SPACING = timedelta(days=1)  # minimum spacing of remote calendar attempts
 
 
 # ----------------------------------------------------------------------------- protocols
@@ -231,8 +233,9 @@ class CachedCalendar:
     """Alpaca-backed calendar cached in a :class:`CalendarStore`; falls back to StaticCalendar.
 
     The cache is refreshed with ``fetch_remote(today - 400 d, today + 60 d)`` when it has never
-    been refreshed, is older than ``max_age_days``, or does not cover the requested range. At
-    most one remote attempt is made per instance so a failing remote is not hammered. When the
+    been refreshed, is older than ``max_age_days``, or does not cover the requested range.
+    Remote attempts (successful or not) are spaced at least one day apart, so a failing remote
+    is not hammered while a long-running process (``trader run``) still refreshes. When the
     remote is missing or fails and the cache does not cover the range, the range is served
     from :class:`StaticCalendar` (``source = "static"``, logged as a warning); a stale cache
     that still covers the range keeps being used.
@@ -270,7 +273,7 @@ class CachedCalendar:
         self._tz = ZoneInfo(tz)
         self._static = StaticCalendar(tz)
         self._max_age = timedelta(days=max_age_days)
-        self._remote_attempted = False
+        self._last_attempt: datetime | None = None
         self.source = "static"
 
     def _covers(self, start: date, end: date) -> bool:
@@ -284,9 +287,14 @@ class CachedCalendar:
         last = self._store.calendar_last_refreshed()
         return last is None or self._clock.now() - last > self._max_age
 
+    def _may_attempt(self) -> bool:
+        """Return True when no remote attempt was made in the last day."""
+        last = self._last_attempt
+        return last is None or self._clock.now() - last >= _REMOTE_RETRY_SPACING
+
     def _refresh(self) -> bool:
         """Fetch the remote calendar once and upsert it; return True on success."""
-        self._remote_attempted = True
+        self._last_attempt = self._clock.now()
         if self._fetch_remote is None:
             return False
         today = self._clock.now().astimezone(self._tz).date()
@@ -314,7 +322,7 @@ class CachedCalendar:
             range. ``self.source`` records which; read it after the query.
         """
         covered = self._covers(start, end)
-        if not self._remote_attempted and (not covered or self._is_stale()):
+        if self._may_attempt() and (not covered or self._is_stale()):
             self._refresh()
             covered = self._covers(start, end)
         if covered:

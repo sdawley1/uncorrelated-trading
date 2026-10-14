@@ -407,3 +407,37 @@ def test_resolve_as_of_with_cached_calendar():
     a = resolve_as_of(at(2026, 10, 14, 12, 0), cal, "America/New_York", 20)
     assert a.mode == "non_trading_day" and a.day == date(2026, 10, 13)
     assert cal.source == "alpaca"
+
+
+def test_cached_calendar_long_running_refreshes_again():
+    # One instance used for 70 days (the ``trader run`` case): the remote must be consulted
+    # again once the cache is stale or stops covering the range, at most once per day.
+    store, remote = FakeStore(), FakeRemote()
+    clock = FakeClock(NOW)
+    cal = CachedCalendar(store, remote, clock, "America/New_York")
+    cal.trading_days(date(2026, 10, 12), date(2026, 10, 16))
+    assert len(remote.calls) == 1 and cal.source == "alpaca"
+    for _ in range(70):
+        clock.advance(24 * 3600)
+        today = clock.now().astimezone(NY).date()
+        cal.trading_days(today - timedelta(days=10), today + timedelta(days=1))
+        assert cal.source == "alpaca"
+    # Refreshed when the 30-day max age passed (day 31) and again on day 62.
+    assert len(remote.calls) == 3
+    assert store.refreshed == NOW + timedelta(days=62)
+
+
+def test_cached_calendar_failed_remote_retried_after_a_day():
+    store = FakeStore()
+    remote = FakeRemote(fail=True)
+    clock = FakeClock(NOW)
+    cal = CachedCalendar(store, remote, clock, "America/New_York")
+    cal.trading_days(date(2026, 10, 12), date(2026, 10, 16))
+    assert cal.source == "static" and len(remote.calls) == 1
+    clock.advance(12 * 3600)
+    cal.trading_days(date(2026, 10, 12), date(2026, 10, 16))
+    assert len(remote.calls) == 1  # not hammered within the day
+    remote.fail = False
+    clock.advance(12 * 3600)
+    cal.trading_days(date(2026, 10, 12), date(2026, 10, 16))
+    assert len(remote.calls) == 2 and cal.source == "alpaca"
