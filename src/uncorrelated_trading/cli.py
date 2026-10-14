@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from uncorrelated_trading import __version__, app, jobs
 from uncorrelated_trading.calendar import CachedCalendar, previous_trading_day
-from uncorrelated_trading.config import AppConfig, Settings
+from uncorrelated_trading.config import AppConfig, Settings, packaged_config_path
 from uncorrelated_trading.errors import (
     AnalysisError,
     ConfigError,
@@ -211,7 +211,8 @@ def _cmd_check_config(args: argparse.Namespace) -> int:
     """Validate every setting and the config file."""
     settings = _load_settings(args, require_alpaca=True, require_email=True)
     config = AppConfig.load(settings.config_file)
-    _out(f"config file:   {settings.config_file}")
+    packaged = " (packaged default)" if settings.config_file == packaged_config_path() else ""
+    _out(f"config file:   {settings.config_file}{packaged}")
     _out(f"data dir:      {settings.data_dir}")
     _out(f"universe:      {len(config.universe.symbols)} symbols")
     _out(f"alpaca:        {'paper' if settings.alpaca_paper else 'live'} account (read only)")

@@ -1,0 +1,61 @@
+[universe]
+# Equity-only energy, metals/mining, agriculture, materials, plus equity-holding sector ETFs.
+symbols = [
+  # Integrated / E&P / services / refining / midstream
+  "XOM","CVX","COP","EOG","OXY","DVN","FANG","APA","CTRA","EQT","AR","RRC",
+  "SLB","HAL","BKR","MPC","PSX","VLO","KMI","WMB","OKE","LNG","TRGP",
+  # Solar / clean energy equities
+  "FSLR","ENPH",
+  # Metals and mining
+  "FCX","NEM","SCCO","AA","CLF","NUE","STLD","RS","MP","ALB","SQM",
+  "AEM","WPM","RGLD","HL","CDE","PAAS","VALE","RIO","BHP",
+  # Agriculture and ag-chemicals
+  "ADM","BG","CF","MOS","NTR","CTVA","FMC","DE","AGCO","TSN","INGR","DAR",
+  # Industrial materials and chemicals
+  "LIN","APD","DD","DOW","LYB","CE","EMN","VMC","MLM",
+  # Equity-holding sector ETFs (no futures or physical commodity funds)
+  "XLE","XOP","OIH","XME","GDX","GDXJ","SIL","MOO","XLB","COPX","URA","TAN","ICLN","PICK",
+]
+excluded_patterns = ["USO","UNG","GLD","SLV","DBC","BNO","UCO","SCO","PPLT","PALL","CORN","WEAT","SOYB","CPER"]
+
+[data]
+backfill_calendar_days = 420       # covers 250 trading days with margin
+overlap_calendar_days = 7          # re-fetch this much history each run to catch corrections and splits
+adjustment = "split"
+alpaca_feed = "sip"
+alpaca_requests_per_minute = 180
+alpaca_symbols_per_request = 40
+twelvedata_requests_per_minute = 7
+twelvedata_requests_per_day = 750
+twelvedata_fallback_max_per_run = 20
+crosscheck_fraction = 0.2          # share of the universe cross-checked against Twelve Data per run
+close_mismatch_tolerance = 0.005   # 0.5 % relative difference flags close_mismatch / restated
+post_close_settle_minutes = 20     # before 16:20 ET today's bars are marked provisional
+
+[analysis]
+primary_window = 60
+windows = [60, 120, 250]
+tau = 0.20
+tau_spearman = 0.30
+max_set_size_exact = 4
+max_sets_per_size = 50
+search_time_budget_s = 20.0
+momentum_k = 20
+momentum_long = 120
+momentum_skip = 20
+momentum_weights = [0.4, 0.3, 0.3]
+direction_threshold = 0.5
+
+[schedule]
+refresh_time = "16:25"             # local exchange time, trading days only
+send_time = "07:00"                # local exchange time
+send_on_days = "weekdays"          # "weekdays" | "trading_days" | "every_day"
+poll_seconds = 30
+send_misfire_grace_hours = 3
+refresh_misfire_grace_hours = 6
+
+[report]
+top_pairs = 15
+top_sets_per_size = 5
+top_momentum = 10
+subject_prefix = "[uncorrelated-trading]"

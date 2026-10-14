@@ -6,8 +6,11 @@ Two sources of configuration are kept apart:
   variables, optionally supplemented by a ``.env`` file (python-dotenv). Values already
   present in the process environment always win over the file.
 * :class:`AppConfig` holds the non-secret analysis, data, schedule and report parameters
-  read from a TOML file (``config/default.toml`` by default). Missing sections or keys fall
-  back to the defaults of spec section A5, so a partial TOML file is valid.
+  read from a TOML file: ``UT_CONFIG_FILE`` (or ``--config``) when set, else
+  ``./config/default.toml`` when it exists, else the copy shipped inside the package
+  (``uncorrelated_trading/config_default.toml``, see :func:`packaged_config_path`). Missing
+  sections or keys fall back to the defaults of spec section A5, so a partial TOML file is
+  valid.
 
 Both loaders collect every problem they find and raise a single :class:`ConfigError`
 listing all of them.
@@ -24,6 +27,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from datetime import time
+from importlib import resources
 from pathlib import Path
 from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -49,10 +53,36 @@ _SECRET_FIELDS = frozenset(
     {"alpaca_api_key", "alpaca_secret_key", "twelvedata_api_key", "smtp_password", "resend_api_key"}
 )
 _DB_FILENAME = "uncorrelated_trading.sqlite3"
+_LOCAL_CONFIG = Path("config/default.toml")
+_PACKAGED_CONFIG = "config_default.toml"
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 _HHMM_RE = re.compile(r"^(\d{2}):(\d{2})$")
 _MIN_SYMBOLS = 2
 _MAX_SYMBOLS = 200
+
+
+def packaged_config_path() -> Path:
+    """Return the path of the default TOML config shipped inside the package.
+
+    Returns
+    -------
+    Path
+        ``uncorrelated_trading/config_default.toml`` in the installed package; a byte-identical
+        copy of the repository's ``config/default.toml``.
+    """
+    return Path(str(resources.files("uncorrelated_trading") / _PACKAGED_CONFIG))
+
+
+def default_config_path() -> Path:
+    """Return the config file used when neither ``UT_CONFIG_FILE`` nor ``--config`` is set.
+
+    Returns
+    -------
+    Path
+        ``config/default.toml`` (relative to the working directory) when that file exists,
+        else :func:`packaged_config_path`.
+    """
+    return _LOCAL_CONFIG if _LOCAL_CONFIG.is_file() else packaged_config_path()
 
 
 class _Unset(enum.Enum):
@@ -310,6 +340,11 @@ class _SettingsParser:
             self.problems.append(f"EMAIL_TO contains invalid addresses: {', '.join(bad)}")
         return backend, sender, recipients
 
+    def config_file(self) -> Path:
+        """Read ``UT_CONFIG_FILE``, defaulting to :func:`default_config_path`."""
+        raw = self.get("UT_CONFIG_FILE")
+        return Path(raw) if raw else default_config_path()
+
     def timezone(self) -> str:
         """Read ``UT_TIMEZONE`` and check it names a known IANA zone."""
         tz = self.get("UT_TIMEZONE") or "America/New_York"
@@ -355,7 +390,7 @@ class _SettingsParser:
             google_service_account_file=Path(sa_file) if sa_file else None,
             google_sheet_id=self.get("GOOGLE_SHEET_ID"),
             data_dir=Path(self.get("UT_DATA_DIR") or "data"),
-            config_file=Path(self.get("UT_CONFIG_FILE") or "config/default.toml"),
+            config_file=self.config_file(),
             timezone=self.timezone(),
             log_level=self.log_level(),
         )

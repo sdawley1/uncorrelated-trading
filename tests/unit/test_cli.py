@@ -258,3 +258,18 @@ def test_make_sender_backends(tmp_path: Path):
     assert app.make_sender(smtp, clock).name == "smtp"
     assert app.make_sender(resend, clock).name == "resend"
     assert app.make_sender(_settings(tmp_path), clock).name == "file"
+
+
+def test_check_config_outside_repo_uses_packaged_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    from uncorrelated_trading.config import packaged_config_path
+
+    monkeypatch.setenv("ALPACA_API_KEY", "PKFAKEFAKEFAKE")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "fake-secret")
+    monkeypatch.setenv("EMAIL_BACKEND", "file")
+    monkeypatch.setenv("EMAIL_FROM", "bot@example.com")
+    monkeypatch.setenv("EMAIL_TO", "me@example.com")
+    assert cli.main(["--data-dir", str(tmp_path), "check-config"]) == 0
+    out = capsys.readouterr().out
+    assert f"config file:   {packaged_config_path()} (packaged default)" in out

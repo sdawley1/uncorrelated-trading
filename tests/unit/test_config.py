@@ -240,3 +240,35 @@ def test_toml_problems_collected_at_once(tmp_path):
 def test_missing_toml_file(tmp_path):
     with pytest.raises(ConfigError, match="not found"):
         AppConfig.load(tmp_path / "nope.toml")
+
+
+# ----------------------------------------------------------------------------- packaged config
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def test_packaged_default_config_is_identical_to_repo_copy():
+    from importlib import resources
+
+    packaged = resources.files("uncorrelated_trading") / "config_default.toml"
+    assert packaged.read_bytes() == (REPO / "config" / "default.toml").read_bytes()
+
+
+def test_config_falls_back_to_packaged_default(tmp_path, monkeypatch):
+    from uncorrelated_trading.config import packaged_config_path
+
+    monkeypatch.chdir(tmp_path)  # no ./config/default.toml here
+    s = Settings.from_env(env=GOOD_ENV, dotenv_path=None)
+    assert s.config_file == packaged_config_path()
+    assert s.config_file.is_file()
+    assert len(AppConfig.load(s.config_file).universe.symbols) > 0
+
+
+def test_local_config_preferred_over_packaged(tmp_path, monkeypatch):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "default.toml").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    s = Settings.from_env(env=GOOD_ENV, dotenv_path=None)
+    assert s.config_file == Path("config/default.toml")
+    explicit = Settings.from_env(env={**GOOD_ENV, "UT_CONFIG_FILE": "x.toml"}, dotenv_path=None)
+    assert explicit.config_file == Path("x.toml")
