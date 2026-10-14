@@ -5,7 +5,8 @@ Behaviour (spec A7):
 1. The primary (Alpaca) is asked for the whole batch; ``retryable`` errors are retried with
    exponential backoff (default 1 s, 2 s, 4 s after the initial attempt).
 2. Symbols for which the primary returned no bars (or every symbol, if the batch failed) are
-   fetched from the fallback (Twelve Data) one symbol per request, capped at ``fallback_max``;
+   fetched from the fallback (Twelve Data) one symbol per request, capped at ``fallback_max``
+   (or the caller's remaining per-run ``fallback_budget``);
    they are tagged ``fallback_used``. Symbols still missing are tagged ``dropped_missing``.
 3. A deterministic, daily-rotating sample of ``ceil(N * fraction)`` symbols is cross-checked
    against the fallback's latest closes while the daily budget allows; a relative difference
@@ -98,7 +99,14 @@ class CompositeDataSource:
         self._sleep = sleep
 
     def fetch(
-        self, symbols: Sequence[str], start: date, end_utc: datetime, as_of_day: date
+        self,
+        symbols: Sequence[str],
+        start: date,
+        end_utc: datetime,
+        as_of_day: date,
+        *,
+        fallback_budget: int | None = None,
+        crosscheck: bool = True,
     ) -> CompositeFetchResult:
         """Fetch bars with fallback and cross-check, reporting per-symbol quality.
 
@@ -112,6 +120,11 @@ class CompositeDataSource:
             Tz-aware request end (see :func:`uncorrelated_trading.calendar.data_request_end`).
         as_of_day : date
             As-of trading day; keys the cross-check rotation.
+        fallback_budget : int or None
+            Fallback requests still allowed in the caller's run; the cap for this call is
+            ``min(fallback_max, fallback_budget)``. None applies ``fallback_max`` alone.
+        crosscheck : bool
+            Run the rotating cross-check (False for retry and re-fetch calls of a run).
 
         Returns
         -------
@@ -130,11 +143,15 @@ class CompositeDataSource:
         quality: list[SymbolQuality] = []
         fallback_calls = 0
         if missing:
-            fb_bars, fb_quality, fallback_calls = self._fetch_fallback(missing, start, end_utc)
+            cap = self._fallback_max
+            if fallback_budget is not None:
+                cap = max(0, min(cap, fallback_budget))
+            fb_bars, fb_quality, fallback_calls = self._fetch_fallback(missing, start, end_utc, cap)
             bars.extend(fb_bars)
             quality.extend(fb_quality)
         primary_symbols = [s for s in wanted if s in have]
-        quality.extend(self._crosscheck(wanted, primary_symbols, bars, end_utc, as_of_day))
+        if crosscheck:
+            quality.extend(self._crosscheck(wanted, primary_symbols, bars, end_utc, as_of_day))
         return CompositeFetchResult(
             bars=bars,
             quality=tuple(quality),
@@ -223,9 +240,9 @@ class CompositeDataSource:
         return []
 
     def _fetch_fallback(
-        self, missing: list[str], start: date, end_utc: datetime
+        self, missing: list[str], start: date, end_utc: datetime, cap: int
     ) -> tuple[list[Bar], list[SymbolQuality], int]:
-        """Fetch ``missing`` symbols one per request from the fallback, up to the cap."""
+        """Fetch ``missing`` symbols one per request from the fallback, up to ``cap``."""
         bars: list[Bar] = []
         quality: list[SymbolQuality] = []
         calls = 0
@@ -237,10 +254,11 @@ class CompositeDataSource:
             if stopped:
                 quality.append(_dropped(symbol, stopped))
                 continue
-            if calls >= self._fallback_max:
+            if calls >= cap:
                 quality.append(
                     _dropped(
-                        symbol, f"no data from primary; fallback cap {self._fallback_max} reached"
+                        symbol,
+                        f"no data from primary; fallback cap {self._fallback_max} per run reached",
                     )
                 )
                 continue

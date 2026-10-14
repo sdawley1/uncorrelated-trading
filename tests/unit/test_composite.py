@@ -310,3 +310,25 @@ def test_fetch_daily_bars_returns_bars(bars):
     assert composite.name == "composite"
     out = composite.fetch_daily_bars(SYMS, START, END_UTC)
     assert {b.symbol for b in out} == set(SYMS)
+
+
+def test_fallback_budget_caps_below_fallback_max(bars):
+    primary = FakeSource("alpaca", bars, missing=SYMS)
+    fallback = FakeSource("twelvedata", bars)
+    composite = make_composite(primary, fallback, fallback_max=20)
+    result = composite.fetch(SYMS, START, END_UTC, AS_OF, fallback_budget=1)
+    assert fallback.calls == [["AAA"]]
+    assert result.fallback_calls == 1
+    drops = [q for q in result.quality if q.status == "dropped_missing"]
+    assert len(drops) == 4 and "cap" in drops[0].detail
+    none_left = composite.fetch(SYMS, START, END_UTC, AS_OF, fallback_budget=0)
+    assert none_left.fallback_calls == 0 and len(fallback.calls) == 1
+
+
+def test_crosscheck_can_be_disabled_per_call(bars):
+    primary = FakeSource("alpaca", bars)
+    fallback = FakeLatest("twelvedata", _shift_last_close(bars, "BBB", 1.01))
+    composite = make_composite(primary, fallback, crosscheck_fraction=1.0)
+    result = composite.fetch(SYMS, START, END_UTC, AS_OF, crosscheck=False)
+    assert fallback.latest_calls == [] and fallback.calls == []
+    assert result.quality == ()

@@ -318,6 +318,60 @@ def test_fetch_detects_restated_close_and_refetches(tmp_path: Path, conn: sqlite
     assert stored[0].close == pytest.approx(close_for("S03", restated_day) * 1.05)
 
 
+@dataclass
+class EmptyFallback:
+    """Twelve Data stand-in that never has data; records every request."""
+
+    calls: list[tuple[str, ...]] = field(default_factory=list)
+    latest: list[str] = field(default_factory=list)
+    name: str = "twelvedata"
+
+    def fetch_daily_bars(self, symbols: Sequence[str], start: date, end_utc: datetime) -> list[Bar]:
+        self.calls.append(tuple(symbols))
+        return []
+
+    def latest_closes(self, symbols: Sequence[str], n: int = 3) -> dict[str, list[Bar]]:
+        self.latest.extend(symbols)
+        return {}
+
+
+def with_fallback(c: Container, fallback: EmptyFallback, per_run: int) -> Container:
+    config = replace(c.config, data=replace(c.config.data, twelvedata_fallback_max_per_run=per_run))
+    composite = CompositeDataSource(
+        primary=c.data_source._primary,
+        fallback=fallback,
+        tolerance=config.data.close_mismatch_tolerance,
+        fallback_max=per_run,
+        crosscheck_fraction=1.0,
+        min_budget_for_crosscheck=100,
+        budget=None,
+        sleep=c.clock.sleep,
+    )
+    return replace(c, config=config, data_source=composite)
+
+
+def test_fallback_cap_and_crosscheck_are_per_run(tmp_path: Path, conn: sqlite3.Connection):
+    # S05/S06 never come from the primary, S04 stops early: all three are retried one by one.
+    gone = date(2000, 1, 3)
+    source = FakeSource(
+        published_through=AS_OF_DAY,
+        last_day={"S04": date(2026, 10, 7), "S05": gone, "S06": gone},
+    )
+    fallback = EmptyFallback()
+    c = with_fallback(make_container(tmp_path, conn, source), fallback, per_run=1)
+
+    out = fetch_job(c, post_close())
+
+    assert not out.fell_back_to_previous_day
+    assert len(fallback.calls) == 1  # one fallback symbol per run, not one per retry call
+    assert sorted(fallback.latest) == ["S01", "S02", "S03", "S04"]  # retries not cross-checked
+    assert {q.symbol for q in out.quality if q.status == "dropped_missing"} == {
+        "S04",
+        "S05",
+        "S06",
+    }
+
+
 def test_resolve_run_as_of_override_snaps_weekend(tmp_path: Path, conn: sqlite3.Connection):
     c = make_container(tmp_path, conn, FakeSource(published_through=AS_OF_DAY))
     as_of = resolve_run_as_of(c, date(2026, 10, 11))  # Sunday

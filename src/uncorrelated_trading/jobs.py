@@ -31,6 +31,7 @@ from uncorrelated_trading.calendar import (
     resolve_as_of,
     snap_as_of,
 )
+from uncorrelated_trading.data.composite import CompositeFetchResult
 from uncorrelated_trading.errors import (
     ConfigError,
     DataSourceError,
@@ -173,10 +174,29 @@ def _start_for(c: Container, symbol: str, as_of_day: date) -> date:
     return as_of_day - timedelta(days=data.backfill_calendar_days)
 
 
+@dataclass
+class _RunCounters:
+    """Per-run fetch bookkeeping shared by every composite call of one :func:`fetch_job`."""
+
+    fallback_remaining: int
+    primary_failures: int = 0
+    fallback_calls: int = 0
+
+
 def _fetch_symbols(
-    c: Container, symbols: Sequence[str], as_of_day: date, end_utc: datetime
+    c: Container,
+    symbols: Sequence[str],
+    as_of_day: date,
+    end_utc: datetime,
+    counters: _RunCounters,
+    *,
+    crosscheck: bool = True,
 ) -> tuple[int, list[SymbolQuality]]:
-    """Fetch ``symbols`` incrementally, detect restatements and upsert; return count, quality."""
+    """Fetch ``symbols`` incrementally, detect restatements and upsert; return count, quality.
+
+    Fallback requests are charged to ``counters.fallback_remaining`` (the per-run cap); the
+    restatement re-fetch never cross-checks.
+    """
     groups: dict[date, list[str]] = {}
     for symbol in symbols:
         groups.setdefault(_start_for(c, symbol, as_of_day), []).append(symbol)
@@ -184,7 +204,7 @@ def _fetch_symbols(
     quality: list[SymbolQuality] = []
     restated: list[str] = []
     for start in sorted(groups):
-        res = c.data_source.fetch(groups[start], start, end_utc, as_of_day)
+        res = _composite_fetch(c, groups[start], start, end_utc, as_of_day, counters, crosscheck)
         quality.extend(res.quality)
         by_symbol: dict[str, list[Bar]] = {}
         for bar in res.bars:
@@ -198,10 +218,34 @@ def _fetch_symbols(
         written += c.bars.upsert(res.bars)
     if restated:
         full_start = as_of_day - timedelta(days=c.config.data.backfill_calendar_days)
-        res = c.data_source.fetch(restated, full_start, end_utc, as_of_day)
+        res = _composite_fetch(c, restated, full_start, end_utc, as_of_day, counters, False)
         quality.extend(q for q in res.quality if q.status != "close_mismatch")
         written += c.bars.upsert(res.bars)
     return written, quality
+
+
+def _composite_fetch(
+    c: Container,
+    symbols: Sequence[str],
+    start: date,
+    end_utc: datetime,
+    as_of_day: date,
+    counters: _RunCounters,
+    crosscheck: bool,
+) -> CompositeFetchResult:
+    """Call the composite with the run's remaining fallback budget and update the counters."""
+    res = c.data_source.fetch(
+        symbols,
+        start,
+        end_utc,
+        as_of_day,
+        fallback_budget=counters.fallback_remaining,
+        crosscheck=crosscheck,
+    )
+    counters.fallback_remaining = max(0, counters.fallback_remaining - res.fallback_calls)
+    counters.primary_failures += res.primary_failures
+    counters.fallback_calls += res.fallback_calls
+    return res
 
 
 def _with_bar_on(c: Container, symbols: Sequence[str], day: date) -> set[str]:
@@ -254,7 +298,8 @@ def fetch_job(c: Container, as_of: AsOf) -> FetchOutcome:
     universe = list(c.config.universe.symbols)
     tz = c.settings.timezone
     end_utc = data_request_end(as_of, tz, c.clock.now())
-    written, quality = _fetch_symbols(c, universe, as_of.day, end_utc)
+    counters = _RunCounters(fallback_remaining=c.config.data.twelvedata_fallback_max_per_run)
+    written, quality = _fetch_symbols(c, universe, as_of.day, end_utc, counters)
 
     fell_back = False
     present = _with_bar_on(c, universe, as_of.day)
@@ -282,7 +327,7 @@ def fetch_job(c: Container, as_of: AsOf) -> FetchOutcome:
         logger.info("retrying %d symbol(s) missing %s: %s", len(missing), as_of.day, missing)
         end_utc = data_request_end(as_of, tz, c.clock.now())
         for symbol in missing:
-            n, q = _fetch_symbols(c, [symbol], as_of.day, end_utc)
+            n, q = _fetch_symbols(c, [symbol], as_of.day, end_utc, counters, crosscheck=False)
             written += n
             quality.extend(q)
         present = _with_bar_on(c, universe, as_of.day)
